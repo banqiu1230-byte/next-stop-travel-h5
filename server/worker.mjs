@@ -87,13 +87,22 @@ export function createWorker({ fetch: upstreamFetch = (...args) => fetch(...args
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 15_000)
     try {
-      const upstream = await upstreamFetch(target.href, { signal: controller.signal, redirect: 'error' })
-      if (!upstream.ok) return json({ error: '地图服务暂时不可用，请稍后重试' }, 502, cors)
+      // Workerd supports manual redirects; reject non-2xx below so private
+      // credentials are never forwarded to another destination.
+      const upstream = await upstreamFetch(target.href, { signal: controller.signal, redirect: 'manual' })
+      if (!upstream.ok) {
+        console.error('amap_upstream_status', { host, path, status: upstream.status })
+        return json({ error: '地图服务暂时不可用，请稍后重试' }, 502, cors)
+      }
       return new Response(upstream.body, {
         status: 200,
         headers: { ...cors, 'Content-Type': upstream.headers.get('Content-Type') || 'application/json', 'Cache-Control': 'private, max-age=60' }
       })
     } catch (error) {
+      const message = String(error.message || '').replace(/https?:\/\/\S+/g, '[upstream]')
+        .split(env.AMAP_SECURITY_JS_CODE).join('[redacted]')
+        .split(env.AMAP_KEY || env.AMAP_JS_KEY || '[unset]').join('[redacted]').slice(0, 180)
+      console.error('amap_upstream_failure', { host, path, kind: error.name, message })
       return json({ error: error.name === 'AbortError' ? '地图查询超时，请重试' : '地图服务暂时不可用，请稍后重试' }, error.name === 'AbortError' ? 504 : 502, cors)
     } finally {
       clearTimeout(timeout)

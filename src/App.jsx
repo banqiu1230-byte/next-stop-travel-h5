@@ -698,7 +698,10 @@ async function searchAmapPlaces(search, city, type = '', pageSize = 12) {
     placeSearch.search(query, (searchStatus, result) => {
       if (searchStatus === 'complete') resolve(result?.poiList?.pois || [])
       else if (searchStatus === 'no_data') resolve([])
-      else reject(new Error(typeof result === 'string' ? result : (result?.info || '地点搜索失败')))
+      else {
+        const reason = typeof result === 'string' ? result : result?.info
+        reject(new Error(reason && !String(reason).includes('[object ') ? reason : '地点查询暂时不可用，请稍后重试。'))
+      }
     })
   })
   const mapped = pois.map(poi => poiToPlace(poi, city)).filter(Boolean)
