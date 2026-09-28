@@ -212,7 +212,116 @@ export function sortForCondition(ids, places, condition, lockedIds = []) {
   return ids.map(id => lockedIds.includes(id) ? id : movable.shift())
 }
 
-export function previewConditionChange({ ids, places, condition, lockedIds = [], visitedIds = [], currentId }) {
+export function clockToMinutes(value) {
+  const [hours, minutes] = String(value || '').split(':').map(Number)
+  return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * 60 + minutes : 9 * 60
+}
+
+export function formatClockMinutes(value) {
+  const minutes = ((Math.round(value) % 1440) + 1440) % 1440
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+}
+
+export function durationToMinutes(value) {
+  const text = String(value || '')
+  const values = [...text.matchAll(/\d+(?:\.\d+)?/g)].map(match => Number(match[0])).filter(Number.isFinite)
+  if (!values.length) return 90
+  const average = values.reduce((sum, item) => sum + item, 0) / values.length
+  return /小时/.test(text) ? Math.round(average * 60) : Math.round(average)
+}
+
+export function closingTimeToMinutes(value) {
+  const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/)
+  if (!match) return null
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  return hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60 ? hours * 60 + minutes : null
+}
+
+export function placeDistance(a, b) {
+  if (!a?.position || !b?.position) return Number.POSITIVE_INFINITY
+  const toRad = value => value * Math.PI / 180
+  const [lng1, lat1] = a.position
+  const [lng2, lat2] = b.position
+  const dLat = toRad(lat2 - lat1)
+  const dLng = toRad(lng2 - lng1)
+  const value = Math.min(1, Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2)
+  return 6371 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value))
+}
+
+export function transferReserveMinutes(origin, destination, transport = 'public') {
+  const distanceKm = placeDistance(origin, destination)
+  if (!Number.isFinite(distanceKm)) return transport === 'walk' ? 20 : transport === 'drive' ? 25 : 35
+  if (transport === 'walk') return Math.max(10, Math.min(180, Math.ceil((distanceKm / 4.2 * 60) / 5) * 5))
+  if (transport === 'drive') return Math.max(15, Math.min(240, Math.ceil((12 + distanceKm * 1.35) / 5) * 5))
+  return Math.max(20, Math.min(120, Math.ceil((18 + distanceKm * 4) / 5) * 5))
+}
+
+export function scheduleRuntimeStop(cursor, travelMinutes, place, appointmentBuffer = 20) {
+  const earliestArrival = cursor + travelMinutes
+  const appointment = /^\d{1,2}:\d{2}$/.test(String(place.fixed || '')) ? clockToMinutes(place.fixed) : null
+  const canMeetAppointment = appointment !== null && earliestArrival <= appointment
+  const departure = canMeetAppointment ? Math.max(cursor, appointment - appointmentBuffer - travelMinutes) : cursor
+  const arrival = departure + travelMinutes
+  const visitStart = appointment !== null && arrival <= appointment ? appointment : arrival
+  const leave = visitStart + durationToMinutes(place.duration)
+  return { departure, arrival, visitStart, leave, appointment }
+}
+
+export function runtimeStopIssue(place, { arrival, leave, now }) {
+  const appointment = /^\d{1,2}:\d{2}$/.test(String(place.fixed || '')) ? clockToMinutes(place.fixed) : null
+  if (appointment !== null && now >= appointment) return { code: 'appointment-passed', title: `${place.fixed} 预约已过`, detail: '当天无法再按原预约执行' }
+  if (appointment !== null && arrival > appointment) return { code: 'appointment-late', title: `预计赶不上 ${place.fixed} 预约`, detail: '需要移出当天或调整整段行程' }
+  const closing = closingTimeToMinutes(place.closes)
+  if (closing !== null && arrival >= closing) return { code: 'closed-before-arrival', title: '预计到达时已闭馆', detail: `${place.closes} 关闭，当天不建议再去` }
+  if (closing !== null && leave > closing) return { code: 'closing-short', title: '当天可游览时间不足', detail: `预计结束晚于 ${place.closes} 闭馆` }
+  if (leave > 22 * 60 + 30) return { code: 'day-overflow', title: '当天时间不足', detail: `预计 ${formatClockMinutes(leave)} 结束` }
+  return null
+}
+
+export function buildRuntimeDayStatus({ ids, places, visitedIds = [], clock, stage = 'ready', condition = '', energy = 'normal', transportMode = 'public', origin = null }) {
+  const placeMap = new Map(places.map(place => [place.id, place]))
+  const now = clockToMinutes(clock)
+  let cursor = now + (stage === 'ready' ? 5 : 0)
+  let blocked = false
+  let previousPlace = origin
+  return ids.map(id => {
+    const place = placeMap.get(id)
+    if (!place) return { id, missing: true }
+    if (visitedIds.includes(id)) {
+      if (!origin) previousPlace = place
+      return { id, place, done: true, issue: null }
+    }
+    const fixedAt = /^\d{1,2}:\d{2}$/.test(String(place.fixed || '')) ? clockToMinutes(place.fixed) : null
+    if (fixedAt !== null && now >= fixedAt) return { id, place, issue: { code: 'appointment-passed', title: `${place.fixed} 预约已过`, detail: '当天无法再按原预约执行' } }
+    if (blocked) return { id, place, issue: { code: 'blocked-by-previous', title: '当天时间不足', detail: '前序安排已超出当天' } }
+    const recommended = getTransport(place, condition, energy, transportMode).recommended
+    const fallbackTravelMinutes = Number.isFinite(recommended.minutes) ? recommended.minutes : transportMode === 'walk' ? 20 : transportMode === 'drive' ? 30 : 35
+    const travelMinutes = previousPlace?.position && place.position ? transferReserveMinutes(previousPlace, place, transportMode) : fallbackTravelMinutes
+    const { departure, arrival, visitStart, leave, appointment } = scheduleRuntimeStop(cursor, travelMinutes, place)
+    const issue = runtimeStopIssue(place, { arrival, leave, now })
+    if (issue) blocked = true
+    else {
+      cursor = leave
+      previousPlace = place
+    }
+    return { id, place, departure, arrival, visitStart, leave, appointment, travelMinutes, issue }
+  })
+}
+
+export function validateConditionPreview({ preview, ids, places, condition, lockedIds = [], visitedIds = [], clock, energy = 'normal', transportMode = 'public', origin = null }) {
+  const nextPlan = preview.nextPlan || ids
+  const preservedIds = ids.filter(id => visitedIds.includes(id) || lockedIds.includes(id) || places.some(place => place.id === id && place.fixed))
+  const removedProtected = preservedIds.filter(id => !nextPlan.includes(id))
+  const conflicts = buildRuntimeDayStatus({ ids: nextPlan, places, visitedIds, clock, condition, energy, transportMode, origin }).filter(status => status.issue)
+  removedProtected.forEach(id => conflicts.push({ id, place: places.find(place => place.id === id), issue: { code: 'protected-removed', title: '预约或锁定地点需要保留', detail: '请进入路线编辑，单独确认删除或跨天调整。' } }))
+  const unverified = nextPlan.filter(id => !visitedIds.includes(id)).map(id => places.find(place => place.id === id)).filter(place => place && !place.openingVerifiedAt && (!place.closes || place.closes === '待确认'))
+  const changed = ids.length !== nextPlan.length || ids.some((id, index) => nextPlan[index] !== id)
+  const hasAdjustment = changed || ['rain', 'tired', 'hungry'].includes(condition)
+  return { ...preview, nextPlan, nextId: nextPlan.find(id => !visitedIds.includes(id)) ?? null, conflicts, unverified, changed, canApply: !conflicts.length && hasAdjustment }
+}
+
+export function previewConditionChange({ ids, places, condition, lockedIds = [], visitedIds = [], currentId, clock, energy, transportMode, origin }) {
   const completed = ids.filter(id => visitedIds.includes(id))
   const originalFuture = ids.filter(id => !visitedIds.includes(id))
   let future = [...originalFuture]
@@ -235,7 +344,8 @@ export function previewConditionChange({ ids, places, condition, lockedIds = [],
   changes.push(future.length ? `调整后下一站：${nextName}` : '调整后今天没有待去地点')
   if (keptLocked > 0) changes.push(`保留 ${keptLocked} 个预约或锁定地点`)
 
-  return { nextPlan: [...completed, ...future], nextId: future[0] || null, changes }
+  const preview = { nextPlan: [...completed, ...future], nextId: future[0] || null, changes }
+  return clock ? validateConditionPreview({ preview, ids, places, condition, lockedIds, visitedIds, clock, energy, transportMode, origin }) : preview
 }
 
 export function getTransport(place, condition, energy, preferredMode) {

@@ -8,7 +8,7 @@ import {
   Sparkles, Star, ThumbsDown, ThumbsUp, TicketCheck, TrainFront, Trash2, Undo2, Unlock,
   UtensilsCrossed, WalletCards, WifiOff, X, Zap
 } from 'lucide-react'
-import { conditionMeta, formatTravelTime, getTransport, initialPlan, placesByTripSeed, previewConditionChange, sortForCondition } from './trip-data'
+import { buildRuntimeDayStatus, clockToMinutes, closingTimeToMinutes, conditionMeta, durationToMinutes, formatClockMinutes, formatTravelTime, getTransport, initialPlan, placeDistance, placesByTripSeed, previewConditionChange, runtimeStopIssue, scheduleRuntimeStop, sortForCondition, transferReserveMinutes, validateConditionPreview } from './trip-data'
 import { requestAiPlan, requestAiReplan } from './ai-planner'
 import { restoreTripState } from './trip-state'
 import { configureAMap } from './service-config'
@@ -89,16 +89,6 @@ function formatStartedDate(value) {
   return `${date.getMonth() + 1}月${date.getDate()}日开始`
 }
 
-function clockToMinutes(value) {
-  const [hours, minutes] = String(value || '').split(':').map(Number)
-  return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * 60 + minutes : 9 * 60
-}
-
-function formatClockMinutes(value) {
-  const minutes = ((Math.round(value) % 1440) + 1440) % 1440
-  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
-}
-
 function inferConditionRequest(value) {
   const text = String(value || '').trim()
   if (/关门|闭馆|关闭|停业|没开/.test(text)) return 'closed'
@@ -120,30 +110,6 @@ function explicitlyRemovedPlaceIds(value, places, currentId, conditionKey) {
   const named = removing ? places.filter(place => text.includes(place.name)).map(place => place.id) : []
   if (['skip', 'closed'].includes(conditionKey) && currentId !== undefined && currentId !== null) named.push(currentId)
   return [...new Set(named)]
-}
-
-function durationToMinutes(value) {
-  const text = String(value || '')
-  const values = [...text.matchAll(/\d+(?:\.\d+)?/g)].map(match => Number(match[0])).filter(Number.isFinite)
-  if (!values.length) return 90
-  const average = values.reduce((sum, item) => sum + item, 0) / values.length
-  return /\u5c0f\u65f6/.test(text) ? Math.round(average * 60) : Math.round(average)
-}
-
-function closingTimeToMinutes(value) {
-  const match = String(value || '').match(/^(\d{1,2}):(\d{2})$/)
-  if (!match) return null
-  const hours = Number(match[1])
-  const minutes = Number(match[2])
-  return hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60 ? hours * 60 + minutes : null
-}
-
-function transferReserveMinutes(origin, destination, transport = 'public') {
-  const distanceKm = placeDistance(origin, destination)
-  if (!Number.isFinite(distanceKm)) return transport === 'walk' ? 20 : transport === 'drive' ? 25 : 35
-  if (transport === 'walk') return Math.max(10, Math.min(180, Math.ceil((distanceKm / 4.2 * 60) / 5) * 5))
-  if (transport === 'drive') return Math.max(15, Math.min(240, Math.ceil((12 + distanceKm * 1.35) / 5) * 5))
-  return Math.max(20, Math.min(120, Math.ceil((18 + distanceKm * 4) / 5) * 5))
 }
 
 function legTransportMode(origin, destination, preferredMode = 'public') {
@@ -198,17 +164,6 @@ function tripDayStartTime(trip, dayIndex) {
   return formatClockMinutes(Math.max(clockToMinutes(defaultStart), clockToMinutes(arrivalTime) + 60))
 }
 
-function runtimeStopIssue(place, { arrival, leave, now }) {
-  const appointment = /^\d{1,2}:\d{2}$/.test(String(place.fixed || '')) ? clockToMinutes(place.fixed) : null
-  if (appointment !== null && now >= appointment) return { code: 'appointment-passed', title: `${place.fixed} 预约已过`, detail: '当天无法再按原预约执行' }
-  if (appointment !== null && arrival > appointment) return { code: 'appointment-late', title: `预计赶不上 ${place.fixed} 预约`, detail: '需要移出当天或调整整段行程' }
-  const closing = closingTimeToMinutes(place.closes)
-  if (closing !== null && arrival >= closing) return { code: 'closed-before-arrival', title: '预计到达时已闭馆', detail: `${place.closes} 关闭，当天不建议再去` }
-  if (closing !== null && leave > closing) return { code: 'closing-short', title: '当天可游览时间不足', detail: `预计结束晚于 ${place.closes} 闭馆` }
-  if (leave > 22 * 60 + 30) return { code: 'day-overflow', title: '当天时间不足', detail: `预计 ${formatClockMinutes(leave)} 结束` }
-  return null
-}
-
 function departureReadiness({ place, clock, travelMinutes, hasOrigin, routeStatus, previewDay = false }) {
   if (!place) return { status: 'empty', label: '暂无下一站' }
   if (previewDay) return { status: 'preview', label: '到当天再开始', detail: '这是日程预览，不使用现在的时间和位置。' }
@@ -218,7 +173,7 @@ function departureReadiness({ place, clock, travelMinutes, hasOrigin, routeStatu
   const now = clockToMinutes(clock)
   const timing = scheduleRuntimeStop(now + 5, travelMinutes, place)
   const issue = runtimeStopIssue(place, { arrival: timing.arrival, leave: timing.leave, now })
-  if (issue) return { status: 'blocked', label: '调整今天路线', detail: issue.title, issue }
+  if (issue) return { status: 'blocked', label: '查看时间冲突', detail: issue.title, issue }
   if (place.closes === '待确认' && !place.openingVerifiedAt) return { status: 'verify', label: '先核对营业状态', detail: '开放时间未确认，不能先判定可以前往。' }
   return { status: 'ready', label: '开始前往', timing }
 }
@@ -268,47 +223,6 @@ function bookingTimingLabel(task, trip, now = new Date()) {
 
 function networkStatusLabel(online) {
   return online ? '' : '当前离线：已保存的行程仍可查看，实时路线、搜索和营业状态暂停更新。'
-}
-
-function scheduleRuntimeStop(cursor, travelMinutes, place, appointmentBuffer = 20) {
-  const earliestArrival = cursor + travelMinutes
-  const appointment = /^\d{1,2}:\d{2}$/.test(String(place.fixed || '')) ? clockToMinutes(place.fixed) : null
-  const canMeetAppointment = appointment !== null && earliestArrival <= appointment
-  const departure = canMeetAppointment ? Math.max(cursor, appointment - appointmentBuffer - travelMinutes) : cursor
-  const arrival = departure + travelMinutes
-  const visitStart = appointment !== null && arrival <= appointment ? appointment : arrival
-  const leave = visitStart + durationToMinutes(place.duration)
-  return { departure, arrival, visitStart, leave, appointment }
-}
-
-function buildRuntimeDayStatus({ ids, places, visitedIds = [], clock, stage = 'ready', condition = '', energy = 'normal', transportMode = 'public' }) {
-  const placeMap = new Map(places.map(place => [place.id, place]))
-  const now = clockToMinutes(clock)
-  let cursor = now + (stage === 'ready' ? 5 : 0)
-  let blocked = false
-  let previousPlace = null
-  return ids.map(id => {
-    const place = placeMap.get(id)
-    if (!place) return { id, missing: true }
-    if (visitedIds.includes(id)) {
-      previousPlace = place
-      return { id, place, done: true, issue: null }
-    }
-    const fixedAt = /^\d{1,2}:\d{2}$/.test(String(place.fixed || '')) ? clockToMinutes(place.fixed) : null
-    if (fixedAt !== null && now >= fixedAt) return { id, place, issue: { code: 'appointment-passed', title: `${place.fixed} 预约已过`, detail: '当天无法再按原预约执行' } }
-    if (blocked) return { id, place, issue: { code: 'blocked-by-previous', title: '当天时间不足', detail: '前序安排已超出当天' } }
-    const recommended = getTransport(place, condition, energy, transportMode).recommended
-    const fallbackTravelMinutes = Number.isFinite(recommended.minutes) ? recommended.minutes : transportMode === 'walk' ? 20 : transportMode === 'drive' ? 30 : 35
-    const travelMinutes = previousPlace?.position && place.position ? transferReserveMinutes(previousPlace, place, transportMode) : fallbackTravelMinutes
-    const { departure, arrival, visitStart, leave, appointment } = scheduleRuntimeStop(cursor, travelMinutes, place)
-    const issue = runtimeStopIssue(place, { arrival, leave, now })
-    if (issue) blocked = true
-    else {
-      cursor = leave
-      previousPlace = place
-    }
-    return { id, place, departure, arrival, visitStart, leave, appointment, travelMinutes, issue }
-  })
 }
 
 function buildTodayFeasibilityProposal({ ids, places, visitedIds = [], lockedIds = [], clock, condition = '', energy = 'normal', transportMode = 'public' }) {
@@ -936,17 +850,6 @@ function dateDays(startDate, endDate) {
   return Math.round((end - start) / 86400000) + 1
 }
 
-function placeDistance(a, b) {
-  if (!a?.position || !b?.position) return Number.POSITIVE_INFINITY
-  const toRad = value => value * Math.PI / 180
-  const [lng1, lat1] = a.position
-  const [lng2, lat2] = b.position
-  const dLat = toRad(lat2 - lat1)
-  const dLng = toRad(lng2 - lng1)
-  const value = Math.min(1, Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2)
-  return 6371 * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value))
-}
-
 function routeDistance(places) {
   return places.slice(1).reduce((total, place, index) => {
     const distance = placeDistance(places[index], place)
@@ -1515,11 +1418,20 @@ export default function App() {
   }
 
   function chooseCondition(key, requestLabel = '', aiPreview = null) {
-    if (!currentPlace) return
+    if (!currentPlace) return false
+    const candidate = aiPreview?.nextPlan ? aiPreview : previewConditionChange({ ids: dayPlan, places, condition: key, lockedIds: locked, visitedIds: visited, currentId })
+    const preview = validateConditionPreview({
+      preview: candidate, ids: dayPlan, places, condition: key, lockedIds: locked, visitedIds: visited,
+      clock: journeyStage === 'dayPreview' ? (activeTrip.dayStartTime || '09:30') : clock,
+      energy, transportMode: tripTransportMode(activeTrip), origin: currentRouteOrigin
+    })
+    if (!preview.canApply) {
+      setToast(preview.conflicts.length ? '这版仍有时间或预约冲突，尚未更新路线' : '路线没有变化，无需重复调整')
+      return false
+    }
     const label = requestLabel.trim() || conditionMeta[key]?.label || '自定义调整'
     recordTripVersion(`按“${label}”调整前`)
     setLastRouteChange({ tripId: activeTripId, plan: [...dayPlan], condition, conditionRequest, journeyStage })
-    const preview = aiPreview?.nextPlan ? aiPreview : previewConditionChange({ ids: dayPlan, places, condition: key, lockedIds: locked, visitedIds: visited, currentId })
     setDayPlan(preview.nextPlan)
     if (key === 'closed') setToast(`${currentPlace.name} 已从今天移除`)
     setCondition(key)
@@ -1527,13 +1439,14 @@ export default function App() {
     setProductSignals(value => ({ ...value, replans: (value.replans || 0) + 1 }))
     setJourneyStage(value => value === 'dayPreview' ? 'dayPreview' : 'ready')
     setJourneyProgress({})
+    return true
   }
 
   function chooseTripCondition(key, requestLabel = '', tripPreview = null) {
-    if (!tripPreview?.dailyPlans?.length) return
+    if (!tripPreview?.dailyPlans?.length) return false
     if (tripPreview.unscheduledIds?.length) {
       setToast('这版还有地点放不下，尚未更新行程')
-      return
+      return false
     }
     const label = requestLabel.trim() || conditionMeta[key]?.label || '自定义调整'
     recordTripVersion(`按“${label}”调整整段行程前`)
@@ -1570,6 +1483,7 @@ export default function App() {
     setJourneyStage(value => value === 'dayPreview' ? 'dayPreview' : 'ready')
     setJourneyProgress({})
     setToast(`已更新后续行程，共调整 ${tripPreview.changedDayCount || 0} 天`)
+    return true
   }
 
   function undoConditionChange() {
@@ -2028,7 +1942,7 @@ export default function App() {
     />
     if (screen === 'recommend') return <RecommendScreen
       place={currentPlace} origin={currentRouteOrigin} city={activeTrip.city} transportMode={tripTransportMode(activeTrip)} condition={condition} conditionLabel={conditionRequest} energy={energy} stage={journeyStage}
-      onBack={() => setScreen('main')} onChange={() => openConditions('recommend')}
+      onBack={() => setScreen('main')} onChange={() => openConditions('recommend')} onEdit={() => setScreen('edit')}
       onAdvance={advanceJourney} onNavigate={launchNavigation}
       onCheckRoute={previewNavigation} onVerify={beginOpeningVerification}
       verificationPending={journeyProgress.verificationPendingPlaceId === currentPlace?.id}
@@ -2042,6 +1956,8 @@ export default function App() {
       bookingTasks={bookingTasks}
       clock={journeyStage === 'dayPreview' ? (activeTrip.dayStartTime || '09:30') : clock}
       condition={condition} energy={energy}
+      origin={currentRouteOrigin}
+      onEditToday={() => setScreen('edit')} onEditWholeTrip={() => openRouteEditor('conditions')}
       onBack={() => setScreen(conditionReturn)} onChoose={chooseCondition} onChooseTrip={chooseTripCondition} onUndo={undoConditionChange}
     />
     if (screen === 'edit') return <EditPlanScreen
@@ -2219,7 +2135,7 @@ function TodayScreen({ trip, places, plan, visited, locked, current, condition, 
     : stage === 'arrived' ? { label: '完成这一站', onClick: onAdvance }
       : readiness.status === 'locate' ? { label: readiness.label, onClick: location.requestLocation }
         : readiness.status === 'verify' ? { label: readiness.label, onClick: onCurrent }
-          : readiness.status === 'blocked' ? { label: readiness.label, onClick: onChange }
+          : readiness.status === 'blocked' ? { label: readiness.label, onClick: onEdit }
             : readiness.status === 'verify-route' ? { label: readiness.label, onClick: onCheckRoute }
               : { label: readiness.label, onClick: onAdvance, disabled: ['loading', 'preview', 'empty'].includes(readiness.status) }
   const transportSummary = !transport ? ''
@@ -2251,7 +2167,8 @@ function TodayScreen({ trip, places, plan, visited, locked, current, condition, 
     ? location.status === 'error' || location.status === 'unsupported' ? '定位未开启 · 可手动确认到达' : location.status === 'ready' ? `位置更新中${distanceLabel ? ` · 距目的地${distanceLabel}` : ''}` : '正在获取位置…'
     : stage === 'arrived' ? `停留计时中 · ${stayReminderDue ? '现在可以准备离开' : `约 ${stayMinutesLeft} 分钟后提醒`}`
       : isDayPreview ? `下一天预览 · 按 ${planningClock} 规划`
-        : condition ? `已按「${conditionLabel || conditionMeta[condition]?.label || '自定义要求'}」调整` : `行程建议 · ${clock} 更新`
+        : condition && readiness.status === 'blocked' ? '仍有时间冲突'
+          : condition ? `已按「${conditionLabel || conditionMeta[condition]?.label || '自定义要求'}」调整` : `行程建议 · ${clock} 更新`
   const weatherValue = liveWeather.weather || { temperature: trip.temperature || '--', label: trip.weather || (liveWeather.status === 'loading' ? '天气更新中…' : '天气待接入') }
   return <div className="screen today-screen enter">
     <header className="topbar">
@@ -2396,7 +2313,7 @@ function recommendationReasons(place, condition, origin, readiness) {
   return [first, timeReason, place.nearby ? `结束后附近还有 ${place.nearby} 个行程地点` : '加入路线后会继续寻找顺路停靠点']
 }
 
-function RecommendScreen({ place, origin, city, transportMode, condition, conditionLabel, energy, stage, onBack, onChange, onAdvance, onNavigate, onCheckRoute, onVerify, verificationPending, onConfirmOpen, onConfirmClosed, canUndo, onUndo, location }) {
+function RecommendScreen({ place, origin, city, transportMode, condition, conditionLabel, energy, stage, onBack, onChange, onEdit, onAdvance, onNavigate, onCheckRoute, onVerify, verificationPending, onConfirmOpen, onConfirmClosed, canUndo, onUndo, location }) {
   const [showAlternatives, setShowAlternatives] = useState(false)
   const [photoIndex, setPhotoIndex] = useState(0)
   const currentTransportMode = legTransportMode(origin, place, transportMode)
@@ -2415,7 +2332,7 @@ function RecommendScreen({ place, origin, city, transportMode, condition, condit
   const actionHandler = stage !== 'ready' ? onAdvance
     : readiness.status === 'locate' ? location.requestLocation
       : readiness.status === 'verify' ? onVerify
-        : readiness.status === 'blocked' ? onChange
+        : readiness.status === 'blocked' ? onEdit
           : readiness.status === 'verify-route' ? onCheckRoute : onAdvance
   const actionDisabled = stage === 'ready' && ['loading', 'preview', 'empty'].includes(readiness.status)
   return <div className="screen recommendation-screen enter">
@@ -2483,7 +2400,31 @@ function TransportModeIcon({ id }) {
   return <TrainFront/>
 }
 
-function ConditionScreen({ trip, city, active, activeLabel, current, plan, places, visited, locked, bookingTasks = [], clock, condition, energy, onBack, onChoose, onChooseTrip, onUndo }) {
+function ConditionScreen({ trip, city, active, activeLabel, current, plan, places, visited, locked, bookingTasks = [], clock, condition, energy, origin, onBack, onChoose, onChooseTrip, onUndo, onEditToday, onEditWholeTrip }) {
+  const screenRef = React.useRef(null)
+  React.useLayoutEffect(() => {
+    const viewport = window.visualViewport
+    let frame = 0
+    const update = () => {
+      frame = 0
+      // Do not counteract the user's pinch zoom or reflow at a magnified size.
+      if (viewport && Math.abs(viewport.scale - 1) > .01) return
+      const inset = window.matchMedia('(min-width: 700px)').matches ? 22 : 0
+      screenRef.current?.style.setProperty('--chat-viewport-top', `${(viewport?.offsetTop || 0) + inset}px`)
+      screenRef.current?.style.setProperty('--chat-viewport-height', `${Math.max(0, (viewport?.height || window.innerHeight) - inset * 2)}px`)
+    }
+    const schedule = () => { if (!frame) frame = window.requestAnimationFrame(update) }
+    update()
+    viewport?.addEventListener('resize', schedule)
+    viewport?.addEventListener('scroll', schedule)
+    window.addEventListener('resize', schedule)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      viewport?.removeEventListener('resize', schedule)
+      viewport?.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', schedule)
+    }
+  }, [])
   const [scope, setScope] = useState('today')
   const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState('')
@@ -2495,12 +2436,15 @@ function ConditionScreen({ trip, city, active, activeLabel, current, plan, place
   const activeDayIndex = Math.max(0, (trip?.currentDay || 1) - 1)
   const tripScope = aiPreview?.scope === 'trip' || (scope === 'trip' && !aiPreview)
   const selectedMeta = selected ? conditionMeta[selected] || { label: '自定义调整', hint: '按你的说明重新安排', preview: '根据你的要求重排后续路线' } : null
-  const preview = aiPreview || (selectedMeta && scope === 'today' ? previewConditionChange({ ids: plan, places, condition: selected, lockedIds: locked, visitedIds: visited, currentId: current?.id }) : null)
+  const candidatePreview = aiPreview || (selectedMeta && scope === 'today' ? previewConditionChange({ ids: plan, places, condition: selected, lockedIds: locked, visitedIds: visited, currentId: current?.id }) : null)
+  const preview = candidatePreview && candidatePreview.scope !== 'trip' ? validateConditionPreview({ preview: candidatePreview, ids: plan, places, condition: selected, lockedIds: locked, visitedIds: visited, clock, energy, transportMode: tripTransportMode(trip), origin }) : candidatePreview
+  const todayBlocked = preview?.scope !== 'trip' && Boolean(preview?.conflicts?.length)
+  const todayUnchanged = preview?.scope !== 'trip' && preview?.canApply === false && !todayBlocked
   const nextPlace = preview?.nextId ? places.find(place => place.id === preview.nextId) : null
   const pendingCount = plan.filter(id => !visited.includes(id)).length
   const remainingDayCount = Math.max(1, (trip?.dailyPlans?.length || trip?.days || 1) - activeDayIndex)
   const protectedCount = locked.filter(id => (tripScope ? trip.dailyPlans.slice(activeDayIndex).flat() : plan).includes(id) && !visited.includes(id)).length
-  const responseTitle = aiPreview?.title || {
+  const responseTitle = todayBlocked ? '今天仍然来不及' : todayUnchanged ? '路线没有变化，暂时不用确认' : aiPreview?.title || {
     rain: '可以，今天尽量避雨', tired: '可以，今天改轻松一点', hungry: '可以，先解决吃饭',
     late: '可以，压缩今天的安排', skip: '可以，先跳过这一站', closed: '收到，我会绕开关闭地点',
     custom: '我按你的要求整理了一版'
@@ -2690,9 +2634,9 @@ function ConditionScreen({ trip, city, active, activeLabel, current, plan, place
     window.requestAnimationFrame(() => document.querySelector('.condition-composer input')?.focus())
   }
   const applyRequest = () => {
-    if (preview?.scope === 'trip') onChooseTrip(selected, requestText, preview)
-    else onChoose(selected, requestText, preview)
-    setFeedbackState('applied')
+    if (!preview || (preview.scope !== 'trip' && !preview.canApply)) return
+    const applied = preview.scope === 'trip' ? onChooseTrip(selected, requestText, preview) : onChoose(selected, requestText, preview)
+    if (applied) setFeedbackState('applied')
   }
   const undoAppliedRequest = () => {
     onUndo()
@@ -2710,7 +2654,7 @@ function ConditionScreen({ trip, city, active, activeLabel, current, plan, place
     setFallbackReason('')
     setFeedbackState('idle')
   }
-  return <div className="screen condition-screen enter">
+  return <div ref={screenRef} className="screen condition-screen enter">
     <header className="simple-head"><button className="icon-btn" aria-label="返回" onClick={onBack}><ArrowLeft/></button><span>情况变了</span><i/></header>
     <section className="condition-chat" aria-label="AI 行程调整对话">
       <div className="condition-message assistant"><span className="condition-avatar"><Sparkles/></span><div><strong>现在发生了什么？</strong><p>可以只改今天，也可以调整后续行程。我会先给你看完整结果，确认后才会修改；预约和锁定地点默认保留，冲突会单独标出。</p>{active && <small>当前已按「{activeLabel || conditionMeta[active]?.label || '自定义要求'}」调整</small>}</div></div>
@@ -2719,7 +2663,10 @@ function ConditionScreen({ trip, city, active, activeLabel, current, plan, place
       {history.map((message, index) => message.role === 'user' ? <div className="condition-message user history" key={`${message.role}-${index}`}><p>{message.text}</p></div> : <div className="condition-message assistant history" key={`${message.role}-${index}`}><span className="condition-avatar"><Sparkles/></span><div><p>{message.text}</p></div></div>)}
       {requestText && <div className="condition-message user"><p>{requestText}</p></div>}
       {feedbackState === 'thinking' && <div className="condition-message assistant thinking" role="status"><span className="condition-avatar"><Sparkles/></span><div><span className="condition-thinking-dots"><i/><i/><i/></span><strong>{scope === 'trip' ? `正在检查后续 ${remainingDayCount} 天` : `正在调整剩余 ${pendingCount} 站`}</strong><p>确认前不会修改路线。</p></div></div>}
-      {selectedMeta && preview && feedbackState === 'ready' && <div className={`condition-message assistant response ${preview.scope === 'trip' ? 'trip-response' : ''}`}><span className="condition-avatar"><Sparkles/></span><div><strong>{responseTitle}</strong><p>{aiPreview?.explanation || (selected === 'custom' ? '我会优先保留必去与预约，再减少折返。' : selectedMeta.hint)}</p><div className="condition-result-facts">{preview.scope === 'trip' ? <><span><small>调整范围</small><b>第 {activeDayIndex + 1} 天起</b></span><span><small>变化</small><b>{preview.changedDayCount ? `${preview.changedDayCount} 天会调整` : '暂时不用改'}</b></span></> : <><span><small>调整后下一站</small><b>{nextPlace?.name || '今天不再安排地点'}</b></span><span><small>预约与锁定</small><b>{protectedCount ? `保留 ${protectedCount} 个` : '没有受影响'}</b></span></>}</div>
+      {selectedMeta && preview && feedbackState === 'ready' && <div className={`condition-message assistant response ${preview.scope === 'trip' ? 'trip-response' : ''}`}><span className="condition-avatar"><Sparkles/></span><div><strong>{responseTitle}</strong><p>{todayBlocked ? `按 ${clock} 出发和预计停留时间检查，当前方案还没有解决冲突。可以编辑今天的取舍，或进入后续行程确认跨天移动。` : todayUnchanged ? '地点和顺序都没有变化，这次不会保存为已调整。' : aiPreview?.explanation || (selected === 'custom' ? '我会优先保留必去与预约，再减少折返。' : selectedMeta.hint)}</p><div className="condition-result-facts">{preview.scope === 'trip' ? <><span><small>调整范围</small><b>第 {activeDayIndex + 1} 天起</b></span><span><small>变化</small><b>{preview.changedDayCount ? `${preview.changedDayCount} 天会调整` : '暂时不用改'}</b></span></> : <><span><small>{todayBlocked ? '方案中的下一站' : '调整后下一站'}</small><b>{nextPlace?.name || '今天不再安排地点'}</b></span><span><small>预约与锁定</small><b>{protectedCount ? `保留 ${protectedCount} 个` : '没有受影响'}</b></span></>}</div>
+        {todayBlocked && <div className="condition-hard-stop" role="alert"><AlertTriangle/><span><strong>这版还不能确认</strong><small>{preview.conflicts.map(item => `${item.place?.name || '地点'}：${item.issue.title}（${item.place?.duration ? `预计停留 ${item.place.duration}，` : ''}${item.issue.detail}）`).join('；')}</small></span></div>}
+        {preview.unverified?.length > 0 && <p className="condition-source-note">{preview.unverified.map(place => place.name).join('、')}的营业时间仍待核对；调整路线不会代表已确认开放。</p>}
+        {preview.scope !== 'trip' && <small className="condition-source-note">时间包含暂估交通与停留；出发时会按最新路线再核对。</small>}
         {preview.scope === 'trip' && <div className="condition-trip-preview" aria-label="后续行程预览">{preview.dailyPlans.slice(activeDayIndex).map((ids, offset) => {
           const dayPlaces = ids.map(id => places.find(place => place.id === id)).filter(Boolean)
           const firstTravelMinutes = dayPlaces[0] ? getTransport(dayPlaces[0], '', 'normal', tripTransportMode(trip)).recommended.minutes : null
@@ -2735,8 +2682,8 @@ function ConditionScreen({ trip, city, active, activeLabel, current, plan, place
           {preview.bookingImpacts?.length > 0 && <span><TicketCheck/><b>{preview.bookingImpacts.length} 项预约</b><small>{preview.bookingImpacts.map(item => item.title).join('、')} 将恢复为待确认</small></span>}
         </div>}
         {preview.scope === 'trip' && preview.unscheduledIds?.length > 0 && <div className="condition-hard-stop" role="alert"><AlertTriangle/><span><strong>这版还不能确认</strong><small>有 {preview.unscheduledIds.length} 个地点在现有日期内放不下。请继续说明删减哪些地点，或修改日期。</small></span></div>}
-        <ul>{(preview.changes || []).map(change => <li key={change}>{change}</li>)}</ul>{fallbackReason && <small className="condition-source-note fallback">AI 暂时没有返回结果，已用本地时间与距离规则生成可预览方案。</small>}<div className="condition-response-actions">{preview.scope === 'trip' && (!preview.changedDayCount || preview.unscheduledIds?.length) ? <button className="condition-apply" onClick={restartRequest}>继续说明怎么删减<ArrowRight/></button> : <><button className="condition-apply" onClick={applyRequest}>{preview.scope === 'trip' ? '确认更新后续行程' : '按这个调整'}<ArrowRight/></button><button className="condition-revise" onClick={restartRequest}>继续补充</button></>}</div><button className="condition-defer" onClick={onBack}>{preview.scope === 'trip' && !preview.changedDayCount ? '保持原安排' : '先不改'}</button></div></div>}
-      {feedbackState === 'applied' && <div className="condition-message assistant response success" role="status"><span className="condition-avatar"><Check/></span><div><strong>{tripScope ? '已更新后续行程' : '已更新今天路线'}</strong><p>{tripScope ? '新的逐日安排已保存；你仍可以撤销这次修改。' : nextPlace ? `下一站是「${nextPlace.name}」。` : '今天后续地点已调整完成。'}</p><div className="condition-response-actions"><button className="condition-apply" onClick={onBack}>{tripScope ? '查看新行程' : '查看新路线'}<ArrowRight/></button><button className="condition-revise" onClick={undoAppliedRequest}><Undo2/>撤销</button></div></div></div>}
+        {!todayBlocked && <ul>{(preview.changes || []).map(change => <li key={change}>{change}</li>)}</ul>}{fallbackReason && <small className="condition-source-note fallback">AI 暂时没有返回结果，已用本地时间与距离规则生成可预览方案。</small>}<div className="condition-response-actions">{todayBlocked ? <><button className="condition-apply" onClick={onEditWholeTrip}>调整日期与后续行程<ArrowRight/></button><button className="condition-revise" onClick={onEditToday}>编辑今天路线</button></> : todayUnchanged ? <button className="condition-revise" onClick={restartRequest}>继续补充</button> : preview.scope === 'trip' && (!preview.changedDayCount || preview.unscheduledIds?.length) ? <button className="condition-apply" onClick={restartRequest}>继续说明怎么删减<ArrowRight/></button> : <><button className="condition-apply" onClick={applyRequest}>{preview.scope === 'trip' ? '确认更新后续行程' : '按这个调整'}<ArrowRight/></button><button className="condition-revise" onClick={restartRequest}>继续补充</button></>}</div><button className="condition-defer" onClick={onBack}>{todayUnchanged || (preview.scope === 'trip' && !preview.changedDayCount) ? '保持原安排' : '先不改'}</button></div></div>}
+      {feedbackState === 'applied' && <div className="condition-message assistant response success" role="status"><span className="condition-avatar"><Check/></span><div><strong>{tripScope ? '已更新后续行程' : '已更新今天路线'}</strong><p>{tripScope ? '新的逐日安排已保存；你仍可以撤销这次修改。' : nextPlace ? `下一站是「${nextPlace.name}」。出发前仍会按最新路线核对时间与营业状态。` : '今天后续地点已调整完成。'}</p><div className="condition-response-actions"><button className="condition-apply" onClick={onBack}>{tripScope ? '查看新行程' : '查看新路线'}<ArrowRight/></button><button className="condition-revise" onClick={undoAppliedRequest}><Undo2/>撤销</button></div></div></div>}
     </section>
     <form className="condition-composer" onSubmit={submitRequest}><input value={draft} onChange={event => setDraft(event.target.value)} aria-label="告诉 AI 你的情况" placeholder="告诉我你的要求…"/><button type="submit" aria-label="发送要求" disabled={!draft.trim() || feedbackState === 'thinking'}><ArrowUp/></button></form>
   </div>

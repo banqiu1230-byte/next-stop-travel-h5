@@ -3,6 +3,48 @@
 :root { --nav-height: calc(64px + env(safe-area-inset-bottom, 0px)); }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
+/* Keep native editable text at its readable size, including on iOS focus.
+   Do not disable the user's zoom to work around focus magnification. */
+.app-frame :is(input, textarea, select) {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 16px !important;
+}
+.app-frame .destination-input input { font-size: 20px !important; }
+.searchbox input { flex: 1; min-width: 0; }
+.searchbox > svg, .searchbox > button { flex-shrink: 0; }
+.anchor-settings input { width: 104px; }
+.stay-dates { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 360px) {
+  .stay-dates { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Only the conversation follows the unobscured viewport. The composer is
+   part of its flex layout, so the keyboard never covers a separate overlay. */
+.standalone-flow > .condition-screen {
+  position: fixed;
+  top: var(--chat-viewport-top, 0px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(100%, 480px);
+  height: var(--chat-viewport-height, 100dvh);
+  min-height: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+.condition-screen .condition-chat { padding-bottom: 16px; }
+.condition-screen .condition-composer {
+  position: relative;
+  inset: auto;
+  transform: none;
+  width: 100%;
+  flex: 0 0 auto;
+  margin: 8px 0 max(16px, env(safe-area-inset-bottom, 0px));
+}
+.condition-hard-stop ~ .condition-response-actions { grid-template-columns: minmax(0, 1fr); }
+.condition-hard-stop ~ .condition-response-actions button { min-height: 44px; }
+
 /* A native form must not sit in a locked root plus a second scroll viewport.
    On iOS, focusing date/text inputs can pan even an overflow:hidden body,
    leaving the fixed-height shell clipped when the keyboard closes. */
@@ -23,13 +65,6 @@ html.document-form-flow,
   height: auto;
   min-height: 100dvh;
   overflow: visible;
-}
-.document-form-flow .preference-note-field textarea,
-.document-form-flow .intent-grid input,
-.document-form-flow .planner-search input,
-.document-form-flow .anchor-settings input,
-.document-form-flow .advanced-preferences input {
-  font-size: 16px !important;
 }
 @media (min-width: 700px) {
   .document-form-flow .app-frame.standalone-flow,
