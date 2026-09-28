@@ -3,6 +3,18 @@
 :root { --nav-height: calc(64px + env(safe-area-inset-bottom, 0px)); }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
+/* iOS browser chrome can restore its visible area after the long creation
+   document has already unmounted. Keep the tab shell independent of stale
+   document scroll/dvh measurements; the navigation stays in its grid row. */
+.app-frame.has-bottom-nav {
+  position: fixed;
+  top: var(--visual-viewport-top, 0px);
+  left: 0;
+  right: 0;
+  width: min(100%, 480px);
+  height: var(--visual-viewport-height, 100dvh);
+}
+
 /* Keep native editable text at its readable size, including on iOS focus.
    Do not disable the user's zoom to work around focus magnification. */
 .app-frame :is(input, textarea, select) {
@@ -23,11 +35,11 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    part of its flex layout, so the keyboard never covers a separate overlay. */
 .standalone-flow > .condition-screen {
   position: fixed;
-  top: var(--chat-viewport-top, 0px);
+  top: var(--visual-viewport-top, 0px);
   left: 50%;
   transform: translateX(-50%);
   width: min(100%, 480px);
-  height: var(--chat-viewport-height, 100dvh);
+  height: var(--visual-viewport-height, 100dvh);
   min-height: 0;
   padding-bottom: 0;
   overflow: hidden;

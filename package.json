@@ -8,7 +8,7 @@
     "build": "vite build",
     "build:hosted": "node scripts/build-hosted.mjs",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "node server/deepseek.test.mjs && node src/trip-data.test.mjs && node src/trip-state.test.mjs && node --test server/worker.test.mjs"
+    "test": "node server/deepseek.test.mjs && node src/trip-data.test.mjs && node src/trip-state.test.mjs && node src/create-trip-dates.test.mjs && node --test server/worker.test.mjs"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",

@@ -1,7 +1,7 @@
 import React from 'react'
 import { CalendarDays } from 'lucide-react'
 
-export default function TripDateField({ label, value, min, max, onChange }) {
+export default function TripDateField({ label, value, min, max, onChange, onFocus }) {
   const displayValue = value ? value.replaceAll('-', '.') : '选择日期'
 
   function openDatePicker(event) {
@@ -26,6 +26,7 @@ export default function TripDateField({ label, value, min, max, onChange }) {
         min={min}
         max={max}
         onChange={onChange}
+        onFocus={onFocus}
         onClick={openDatePicker}
       />
     </span>

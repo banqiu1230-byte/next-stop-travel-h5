@@ -13,6 +13,8 @@ import { requestAiPlan, requestAiReplan } from './ai-planner'
 import { restoreTripState } from './trip-state'
 import { configureAMap } from './service-config'
 import TripDateField from './TripDateField'
+import { useVisualViewportFrame } from './useVisualViewportFrame'
+import { createTripDateError } from './create-trip-dates'
 import './empty-trip.css'
 
 const tabs = [
@@ -1183,6 +1185,8 @@ export default function App() {
   const deviceLocation = useDeviceLocation()
   const [tab, setTab] = useState('today')
   const [screen, setScreen] = useState('main')
+  const appFrameRef = useRef(null)
+  useVisualViewportFrame(appFrameRef, screen === 'main')
   const [placesByTrip, setPlacesByTrip] = useState(saved.placesByTrip)
   const [visitedByTrip, setVisitedByTrip] = useState(saved.visitedByTrip)
   const [plansByTrip, setPlansByTrip] = useState(saved.plansByTrip)
@@ -1277,7 +1281,11 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [toast])
 
-  useEffect(() => { window.scrollTo({ top: 0, behavior: 'auto' }) }, [tab, screen])
+  React.useLayoutEffect(() => {
+    if (!window.visualViewport || Math.abs(window.visualViewport.scale - 1) <= .01) {
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+    }
+  }, [tab, screen])
 
   useEffect(() => {
     const trip = trips.find(item => item.id === activeTripId)
@@ -2070,7 +2078,7 @@ export default function App() {
     </>
   }
 
-  return <div className={`app-frame ${screen === 'main' ? 'has-bottom-nav' : 'standalone-flow'}`}>
+  return <div ref={appFrameRef} className={`app-frame ${screen === 'main' ? 'has-bottom-nav' : 'standalone-flow'}`}>
     <div className="grain" />
     {!online && <div className="offline-banner" role="status"><WifiOff/><span>{networkStatusLabel(online)}</span></div>}
     {renderScreen()}
@@ -2402,29 +2410,7 @@ function TransportModeIcon({ id }) {
 
 function ConditionScreen({ trip, city, active, activeLabel, current, plan, places, visited, locked, bookingTasks = [], clock, condition, energy, origin, onBack, onChoose, onChooseTrip, onUndo, onEditToday, onEditWholeTrip }) {
   const screenRef = React.useRef(null)
-  React.useLayoutEffect(() => {
-    const viewport = window.visualViewport
-    let frame = 0
-    const update = () => {
-      frame = 0
-      // Do not counteract the user's pinch zoom or reflow at a magnified size.
-      if (viewport && Math.abs(viewport.scale - 1) > .01) return
-      const inset = window.matchMedia('(min-width: 700px)').matches ? 22 : 0
-      screenRef.current?.style.setProperty('--chat-viewport-top', `${(viewport?.offsetTop || 0) + inset}px`)
-      screenRef.current?.style.setProperty('--chat-viewport-height', `${Math.max(0, (viewport?.height || window.innerHeight) - inset * 2)}px`)
-    }
-    const schedule = () => { if (!frame) frame = window.requestAnimationFrame(update) }
-    update()
-    viewport?.addEventListener('resize', schedule)
-    viewport?.addEventListener('scroll', schedule)
-    window.addEventListener('resize', schedule)
-    return () => {
-      window.cancelAnimationFrame(frame)
-      viewport?.removeEventListener('resize', schedule)
-      viewport?.removeEventListener('scroll', schedule)
-      window.removeEventListener('resize', schedule)
-    }
-  }, [])
+  useVisualViewportFrame(screenRef)
   const [scope, setScope] = useState('today')
   const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState('')
@@ -3523,16 +3509,24 @@ function CreateTripScreen({ onBack, onDone, onSignal }) {
     // Let the browser own scrolling during this form instead of nesting it
     // inside the fixed-height tab shell, especially around keyboard dismissal.
     document.documentElement.classList.add('document-form-flow')
-    return () => document.documentElement.classList.remove('document-form-flow')
+    return () => {
+      // Hand the scrolled document back to the fixed tab shell before paint.
+      if (!window.visualViewport || Math.abs(window.visualViewport.scale - 1) <= .01) {
+        window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+      }
+      document.documentElement.classList.remove('document-form-flow')
+    }
   }, [])
   const savedDraft = useMemo(() => { try { return JSON.parse(localStorage.getItem('next-stop-create-draft-v1')) || {} } catch { return {} } }, [])
-  const [step, setStep] = useState(savedDraft.step || 1)
+  const savedDateError = (savedDraft.startDate || savedDraft.endDate || savedDraft.step > 1) ? createTripDateError(savedDraft.startDate, savedDraft.endDate) : ''
+  const [step, setStep] = useState(savedDateError ? 1 : savedDraft.step || 1)
   const [flowMode, setFlowMode] = useState(savedDraft.flowMode || 'guided')
   const [city, setCity] = useState(savedDraft.city || '')
   const [origin, setOrigin] = useState(savedDraft.origin || '')
   const [styles, setStyles] = useState(savedDraft.styles || [])
   const [startDate, setStartDate] = useState(savedDraft.startDate || '')
   const [endDate, setEndDate] = useState(savedDraft.endDate || '')
+  const [dateFloor, setDateFloor] = useState(localDateKey)
   const [people, setPeople] = useState(savedDraft.people || 2)
   const [pace, setPace] = useState(savedDraft.pace || 'normal')
   const [transport, setTransport] = useState(savedDraft.transport || 'public')
@@ -3552,7 +3546,7 @@ function CreateTripScreen({ onBack, onDone, onSignal }) {
   const [selectedOptionId, setSelectedOptionId] = useState(savedDraft.selectedOptionId || '')
   const [reviewMode, setReviewMode] = useState(savedDraft.reviewMode || 'options')
   const [previewPlace, setPreviewPlace] = useState(null)
-  const [flowError, setFlowError] = useState('')
+  const [flowError, setFlowError] = useState(savedDateError)
   const [planningStatus, setPlanningStatus] = useState('idle')
   const [planningEngine, setPlanningEngine] = useState('local')
   const [planningPhase, setPlanningPhase] = useState('idle')
@@ -3561,6 +3555,7 @@ function CreateTripScreen({ onBack, onDone, onSignal }) {
   const [draftVersions, setDraftVersions] = useState(savedDraft.draftVersions || [])
   const [lastDraftChange, setLastDraftChange] = useState('')
   const days = dateDays(startDate, endDate)
+  const dateError = startDate && endDate ? createTripDateError(startDate, endDate) : ''
   const noteNeedsSlowPace = /长辈|老人|少走|轮椅|带娃|孩子|休息多/.test(preferenceNote)
   const effectivePace = travelConstraintMeta[travelConstraint]?.pace || (noteNeedsSlowPace ? 'slow' : pace)
   const effectiveStyles = [...new Set([...styles, travelConstraintMeta[travelConstraint]?.searchHint].filter(Boolean))]
@@ -3596,7 +3591,8 @@ function CreateTripScreen({ onBack, onDone, onSignal }) {
 
   function finishBasics() {
     if (!city.trim()) return setFlowError('先填写这次旅行的目的地。')
-    if (!days) return setFlowError('请选择有效的出发和返程日期。')
+    const error = createTripDateError(startDate, endDate)
+    if (error) return setFlowError(error)
     setFlowError('')
     setStep(2)
   }
@@ -3774,6 +3770,13 @@ function CreateTripScreen({ onBack, onDone, onSignal }) {
   }
 
   function createTrip() {
+    const error = createTripDateError(startDate, endDate)
+    if (error) {
+      setFlowError(error)
+      setDateFloor(localDateKey())
+      setStep(1)
+      return
+    }
     const cityCodes = { 新疆: 'XINJIANG', 乌鲁木齐: 'URUMQI', 上海: 'SHANGHAI', 北京: 'BEIJING', 成都: 'CHENGDU', 大理: 'DALI', 杭州: 'HANGZHOU', 广州: 'GUANGZHOU', 深圳: 'SHENZHEN' }
     const createdAt = Date.now()
     const dailyPlans = routeDraft.map(group => group.map(place => place.id))
@@ -3876,11 +3879,11 @@ function CreateTripScreen({ onBack, onDone, onSignal }) {
     {step === 1 && <section className="form-stage create-stage create-basics-stage">
       <h1>去哪，玩几天？</h1>
       <label>目的地（城市 / 地区）<div className="destination-input"><MapPin/><input value={city} onChange={event => setCity(event.target.value)} placeholder="例如：杭州或大理"/></div></label>
-      <div className="two-inputs trip-date-row"><TripDateField label="出发日期" value={startDate} onChange={event => setStartDate(event.target.value)}/><TripDateField label="返程日期" value={endDate} min={startDate} onChange={event => setEndDate(event.target.value)}/></div>
+      <div className="two-inputs trip-date-row"><TripDateField label="出发日期" value={startDate} min={dateFloor} onFocus={() => setDateFloor(localDateKey())} onChange={event => { setStartDate(event.target.value); setFlowError('') }}/><TripDateField label="返程日期" value={endDate} min={startDate > dateFloor ? startDate : dateFloor} onFocus={() => setDateFloor(localDateKey())} onChange={event => { setEndDate(event.target.value); setFlowError('') }}/></div>
+      {(flowError || dateError) && <div className="flow-error" role="alert">{flowError || dateError}</div>}
       <div className="edge-time-fields"><div><strong>出发与首末日时间</strong><small>选填</small></div><p className="edge-time-hint">用于检查抵达、返程当天是否来得及</p><label className="edge-origin">从哪个城市出发<input value={origin} onChange={event => setOrigin(event.target.value)} placeholder="例如：上海"/></label><div className="two-inputs"><label>抵达目的地<input type="time" value={arrivalTime} onChange={event => setArrivalTime(event.target.value)}/></label><label>离开目的地<input type="time" value={departureTime} onChange={event => setDepartureTime(event.target.value)}/></label></div></div>
       <div className="people-field"><span>出行人数</span><div><button aria-label="减少人数" onClick={() => setPeople(value => Math.max(1, value - 1))}>−</button><strong>{people} 人</strong><button aria-label="增加人数" onClick={() => setPeople(value => Math.min(12, value + 1))}>＋</button></div></div>
-      {flowError && <div className="flow-error" role="alert">{flowError}</div>}
-      <button className="form-next" disabled={!city.trim() || !days} onClick={finishBasics}>继续</button>
+      <button className="form-next" disabled={!city.trim() || !days || Boolean(dateError)} onClick={finishBasics}>继续</button>
     </section>}
 
     {step === 2 && <section className="form-stage create-stage planning-way-stage">

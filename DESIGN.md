@@ -31,6 +31,7 @@
 - Page gutter: 20px; compact screens down to 16px at 360px and below.
 - Related content gap: 8–12px; component gap: 12–16px; section gap: 24–28px on journey/profile screens, 40px in longer editorial detail views.
 - Tabbed app screens fill the visible viewport without document-level vertical scrolling. The trip-creation form uses native document scrolling instead of a fixed-height nested scroller so iOS can manage input focus, date pickers and keyboard dismissal without clipping the page.
+- Returning from creation resets document scroll before paint. The fixed tab shell follows the unzoomed visual viewport as browser toolbars expand or collapse; navigation remains in its own grid row. Viewport updates must not reset content scroll or counteract manual pinch zoom.
 - Editable controls use at least 16px text; the destination keeps its 20px hierarchy. The conversation alone follows the visual viewport at normal zoom, with the input bar in its flex layout above the keyboard. Never disable or counteract manual pinch zoom.
 - Bottom navigation occupies its own 64px layout row plus the device bottom safe area; tab content ends at its upper edge and never renders underneath it. Headers use 80px (72px in short viewports) plus the top safe area.
 - Validate mobile density in the actual browser content viewport: a 393×852 phone can have only about 393×672 available in an embedded browser. Do not use page zoom or transforms to fit controls; preserve 44px touch targets and 52px primary actions. Browser pinch zoom must remain enabled.
@@ -50,6 +51,7 @@
 - Search input exception: focus is shown on the whole search container with a forest-green border, pale-green surface, and 4px offset shadow; the inner input does not draw its own outline.
 - Trip-creation destination fields use a neutral ink focus state: keep the paper background and strengthen the bottom rule without orange or green highlighting.
 - Trip dates use equal-width, bordered 52px fields with a calendar icon, clear empty/value states and focus/pressed feedback. The whole field opens the native date picker; its return-date minimum follows the departure date.
+- New trips start today or later using the device's local calendar. Recheck dates when continuing and confirming creation, including restored drafts and overnight sessions; invalid drafts keep their inputs and ask for corrected dates. Existing past journeys remain unchanged.
 - Identity marks such as the circular “W” avatar are static unless a profile action exists; static marks must not use button semantics or enter the keyboard tab order.
 - Any control that clears local travel data must name the full consequence and require confirmation before deletion.
 
