@@ -1,0 +1,9 @@
+node_modules/
+dist/
+work/
+.DS_Store
+*.local
+.env
+.env.*
+!.env.example
+.audit/
