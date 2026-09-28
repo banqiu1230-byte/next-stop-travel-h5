@@ -2,6 +2,15 @@
 
 一个面向真实旅行执行场景的移动端 H5 原型。它不只生成行程，还会结合日期、当前位置、营业状态、预约、交通与体力变化，持续判断“下一站现在是否还能去”，并在调整前展示影响范围。
 
+## 在线体验
+
+- [打开在线体验](https://banqiu1230-byte.github.io/next-stop-travel-h5/)
+- [查看 GitHub 源码](https://github.com/banqiu1230-byte/next-stop-travel-h5)
+
+扫码在手机上打开：
+
+![在线体验二维码](share/next-stop-travel-h5-qr.png)
+
 ![上海两日游路线总览](portfolio/shanghai-two-day/03-trip-overview.png)
 
 ## 核心体验
