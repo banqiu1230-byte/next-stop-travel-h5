@@ -21,17 +21,19 @@
 - Product UI, labels, body and controls: Noto Sans SC, 400–700.
 - Time and compact metadata: DM Mono, 500; never below 12px when meaningful.
 - Core mobile UI scale: 12 / 14 / 16 / 20 / 24 / 32 / 36px.
-- Editorial display roles may use optical sizes already established in the product: page title 30px, ticket title 26–28px, feature message 31px, detail/editor title 34px, and form title 38px. Do not introduce additional sizes without assigning a reusable role.
+- Compact journey/profile page titles use 26px, ticket titles 24px, next-stop names 28–30px, and the first-step form title 28–30px. The journey state is a separate 14px label rather than another display-sized line. Detail/editor titles remain 34px and extended form titles may use 38px.
 - Body line-height: 1.6; compact metadata line-height: 1.4.
 - Display letter spacing never tighter than `-0.04em`.
 
 ## Spacing & Layout
 
 - 4pt base scale: 4 / 8 / 12 / 16 / 24 / 32 / 40 / 48 / 64px.
-- Page gutter: 24px; compact screens down to 20px at 360px and below.
-- Related content gap: 8–12px; component gap: 16–24px; section gap: 40px.
+- Page gutter: 20px; compact screens down to 16px at 360px and below.
+- Related content gap: 8–12px; component gap: 12–16px; section gap: 24–28px on journey/profile screens, 40px in longer editorial detail views.
 - App shell fills the visible viewport and must never create document-level vertical scrolling.
-- Bottom navigation occupies its own fixed 84px layout row, with safe-area padding kept inside that row; tab content ends at its upper edge and never renders underneath it.
+- Bottom navigation occupies its own 64px layout row plus the device bottom safe area; tab content ends at its upper edge and never renders underneath it. Headers use 80px (72px in short viewports) plus the top safe area.
+- Validate mobile density in the actual browser content viewport: a 393×852 phone can have only about 393×672 available in an embedded browser. Do not use page zoom or transforms to fit controls; preserve 44px touch targets and 52px primary actions. Browser pinch zoom must remain enabled.
+- Journey cards use content-driven height, not fixed-height image blocks or absolute action offsets. Long place names and larger text must push actions down naturally and remain scrollable.
 - Today and Profile scroll inside the content row with the scrollbar visually hidden; Map remains a non-scrolling full-height canvas.
 - Use 1px dividers and whitespace for grouping. Avoid nested cards.
 
@@ -46,6 +48,7 @@
 - Focus-visible: standard controls use a 2px orange outline with 2px offset.
 - Search input exception: focus is shown on the whole search container with a forest-green border, pale-green surface, and 4px offset shadow; the inner input does not draw its own outline.
 - Trip-creation destination fields use a neutral ink focus state: keep the paper background and strengthen the bottom rule without orange or green highlighting.
+- Trip dates use equal-width, bordered 52px fields with a calendar icon, clear empty/value states and focus/pressed feedback. The whole field opens the native date picker; its return-date minimum follows the departure date.
 - Identity marks such as the circular “W” avatar are static unless a profile action exists; static marks must not use button semantics or enter the keyboard tab order.
 - Any control that clears local travel data must name the full consequence and require confirmation before deletion.
 
@@ -80,6 +83,7 @@
 - Today is the journey action surface, not a gateway page: it directly exposes the next stop, recommended transport and time, “打开高德出发”, “我已到达”, “完成这一站”, and “情况变了”. The next-stop screen remains an optional detail view.
 - The next-stop detail screen combines destination photos, rating, visit facts, public reviews, recommendation reasons, and transport alternatives. It must not open a third-level destination-detail screen.
 - Map headers use direct Chinese product language such as “成都行程 · 2 个地点 / 行程地图”; avoid internal English counters or vague ownership labels.
+- Map title, scope controls and route status share a compact top panel; the selected-place card stays compact below. Fit map bounds using the measured panel sizes and the provider's padding order, preserving route markers and map attribution between overlays. Route segments without provider geometry must never be bridged by an invented solid line.
 - The travel-day lifecycle is explicit: ready → en route → arrived → completed. Completing the last stop closes the day and offers the next planned day; completing the final planned day closes the trip without returning to the pre-trip surface.
 - A completed trip is an immutable travel record. It keeps place details, completion states and accommodation notes visible, but removes route, stay, packing and restart mutations; reopening its route never enters an editor.
 - Once the user has chosen a next stop, the destination screen uses explicit action-state labels such as “前往下一站”, “正在前往”, and “已经到达”; it never continues to describe the selected destination as a recommendation.

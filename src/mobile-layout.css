@@ -1,0 +1,99 @@
+/* Mobile content density, including short in-app browser viewports.
+   Scale the hierarchy and whitespace, never the page or its touch targets. */
+:root { --nav-height: calc(64px + env(safe-area-inset-bottom, 0px)); }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+.screen { padding-left: 20px; padding-right: 20px; }
+.topbar {
+  height: auto;
+  min-height: calc(80px + env(safe-area-inset-top, 0px));
+  padding: calc(12px + env(safe-area-inset-top, 0px)) 0 12px;
+  gap: 16px;
+}
+.topbar > div { min-width: 0; }
+.topbar h1 { font-size: 26px; line-height: 1.3; }
+.topbar .eyebrow { font-size: 12px; line-height: 1.4; margin-bottom: 2px; letter-spacing: .08em; }
+.topbar .avatar { flex-shrink: 0; width: 36px; height: 36px; }
+.bottom-nav { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.bottom-nav button { gap: 2px; }
+.bottom-nav button > span { height: 22px; }
+
+.today-screen .weather-strip { min-height: 52px; padding: 4px 0 8px; gap: 8px; }
+.today-screen .weather-icon { width: 36px; height: 36px; flex-shrink: 0; }
+.today-screen .weather-strip .location { min-height: 44px; margin-left: auto; }
+.today-screen .execution-risk { margin-top: 12px; min-height: 60px; padding: 6px 10px; gap: 8px; grid-template-columns: 18px minmax(0, 1fr) auto; }
+.today-screen .execution-risk > button { padding-left: 4px; }
+.today-screen .hero-card.route-ready:not(.day-complete-card) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 16px;
+  padding: 16px;
+  box-shadow: 4px 4px 0 #c8c4b9;
+}
+.today-screen .hero-card.route-ready:not(.day-complete-card) h2 {
+  position: relative;
+  z-index: 1;
+  margin: 12px 0 8px;
+  font-size: 30px;
+  line-height: 1.25;
+  text-wrap: initial;
+}
+.hero-journey-label {
+  display: block;
+  margin-bottom: 2px;
+  font: 600 14px/1.4 var(--sans);
+  letter-spacing: 0;
+  color: #d5ded8;
+}
+.today-screen .hero-card p { font-size: 13px; line-height: 1.6; }
+.today-screen .hero-detail-link { position: relative; inset: auto; min-height: 44px; align-self: flex-start; }
+.today-screen .hero-action-row { position: relative; inset: auto; grid-template-columns: minmax(0, 1fr) 96px; }
+.today-screen .hero-action-row button { height: auto; min-height: 52px; padding: 8px; }
+.today-screen .hero-action-row .primary-cta { font-size: 14px; gap: 6px; }
+.today-screen .hero-change-cta { gap: 4px; }
+.today-screen .hero-card .stamp { top: 12px; right: 12px; }
+.today-screen .section-block { margin-top: 28px; }
+.today-screen .today-route-section { margin-top: 24px; }
+
+.me-screen .trip-ticket { padding: 16px; margin-top: 4px; box-shadow: 4px 4px 0 var(--green); }
+.me-screen .ticket-top { gap: 12px; letter-spacing: .03em; flex-wrap: wrap; }
+.me-screen .trip-ticket h2 { margin: 12px 0 6px; font-size: 24px; line-height: 1.3; }
+.me-screen .trip-ticket p { margin: 0; font-size: 12px; line-height: 1.5; }
+.me-screen .ticket-stats { margin-top: 12px; padding-top: 10px; gap: 24px; }
+.me-screen .ticket-stats strong { font-size: 20px; }
+.me-screen > .settings-list { margin-top: 24px; }
+.me-screen .settings-list h3 { margin: 0 0 6px; }
+.me-screen .settings-list button { min-height: 52px; height: auto; padding: 8px 0; }
+.me-screen .new-trip-cta { margin-top: 16px; min-height: 64px; padding-top: 8px; padding-bottom: 8px; }
+.me-screen .trip-library { margin-top: 28px; }
+
+.create-screen .simple-head { height: auto; min-height: 72px; padding-top: env(safe-area-inset-top, 0px); }
+.create-screen .create-stage { padding: 24px 0 32px; }
+.create-screen .create-basics-stage h1 { margin: 0 0 24px; font-size: 30px; line-height: 1.3; }
+.create-screen .create-basics-stage label { margin-bottom: 16px; }
+.create-screen .destination-input { height: 52px; }
+.create-screen .destination-input input { font-size: 20px; }
+.create-screen .edge-time-fields { margin-top: 8px; padding: 12px; }
+.create-screen .edge-time-fields > div:first-child { flex-direction: row; align-items: center; gap: 8px; }
+.edge-time-hint { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.create-screen .edge-time-fields .edge-origin { margin: 12px 0 0; }
+.create-screen .edge-time-fields .two-inputs { gap: 12px; }
+.create-screen .edge-time-fields .two-inputs > label { min-width: 0; margin-bottom: 0; }
+.create-screen .edge-time-fields input { min-width: 0; font-size: 16px !important; }
+.create-screen .people-field { margin-top: 12px; min-height: 60px; padding: 8px 0; }
+.create-screen .form-next { margin-top: 16px; }
+
+@media (max-width: 360px) {
+  .screen { padding-left: 16px; padding-right: 16px; }
+  .today-screen .hero-card.route-ready:not(.day-complete-card) { padding: 14px; }
+  .today-screen .hero-card.route-ready:not(.day-complete-card) h2 { font-size: 28px; }
+  .today-screen .hero-action-row { grid-template-columns: minmax(0, 1fr) 88px; }
+  .today-screen .hero-action-row .primary-cta { gap: 4px; }
+  .create-screen .create-basics-stage h1 { font-size: 28px; }
+}
+
+@media (max-height: 700px) {
+  .topbar { min-height: calc(72px + env(safe-area-inset-top, 0px)); padding-top: calc(8px + env(safe-area-inset-top, 0px)); padding-bottom: 8px; }
+  .today-screen .hero-card.route-ready:not(.day-complete-card) { margin-top: 12px; }
+}

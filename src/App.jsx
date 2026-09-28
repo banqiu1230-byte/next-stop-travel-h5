@@ -12,6 +12,7 @@ import { conditionMeta, formatTravelTime, getTransport, initialPlan, placesByTri
 import { requestAiPlan, requestAiReplan } from './ai-planner'
 import { restoreTripState } from './trip-state'
 import { configureAMap } from './service-config'
+import TripDateField from './TripDateField'
 import './empty-trip.css'
 
 const tabs = [
@@ -2273,7 +2274,7 @@ function TodayScreen({ trip, places, plan, visited, locked, current, condition, 
     >
       <div className="stamp">{stage === 'enroute' ? 'ON THE WAY' : stage === 'arrived' ? 'ARRIVED' : isDayPreview ? `DAY ${trip.currentDay || 1}` : clock}</div>
       <div className="hero-kicker">{stage === 'enroute' ? <LocateFixed size={14}/> : stage === 'arrived' ? <Clock3 size={14}/> : <Sparkles size={14}/>} {journeyKicker}</div>
-      <h2>{stage === 'enroute' ? '正在前往，' : stage === 'arrived' ? '已经到达，' : '下一站，'}<br/>{current.name}</h2>
+      <h2><span className="hero-journey-label">{stage === 'enroute' ? '正在前往' : stage === 'arrived' ? '已经到达' : '下一站'}</span>{current.name}</h2>
       <p>{stage === 'ready' || isDayPreview ? <>{readiness.status === 'ready' ? `${transportSummary} · ${transportReason}` : readiness.detail}<br/></> : <>{transportSummary} · {transportReason}<br/></>}{placeClosingSentence(current)}，预计停留 {current.duration.replace('约 ', '')}</p>
       <button className="hero-detail-link" onClick={onCurrent}>查看地点与路线 <ArrowRight/></button>
       <div className="hero-action-row"><button className={`primary-cta ${readiness.status !== 'ready' && stage === 'ready' ? 'requires-check' : ''} ${readiness.status === 'locate' ? 'locate-cta' : ''}`} onClick={primaryAction.onClick} disabled={primaryAction.disabled}>{stage === 'enroute' ? <MapPin/> : stage === 'arrived' ? <Check/> : readiness.status === 'locate' ? <LocateFixed/> : readiness.status === 'blocked' ? <AlertTriangle/> : null}{primaryAction.label}</button><button className="hero-change-cta" onClick={onChange}><Sparkles/>情况变了</button></div>
@@ -2894,6 +2895,7 @@ function AMapCanvas({ city, cityCode, transportMode, places, routeIds, visited, 
     }
 
     let cancelled = false
+    let resizeObserver
     setStatus('loading')
     onStatusChangeRef.current?.('loading')
 
@@ -2937,17 +2939,35 @@ function AMapCanvas({ city, cityCode, transportMode, places, routeIds, visited, 
         let currentMarker = null
         const fitCompleteRoute = () => {
           if (cancelled) return
+          const container = containerRef.current
+          const screen = container?.closest('.map-screen')
+          if (!container || !screen) return
+          const bounds = container.getBoundingClientRect()
+          const topPanel = screen.querySelector('.map-top-panel')?.getBoundingClientRect()
+          const bottomPanel = screen.querySelector('.map-bottom-panel')?.getBoundingClientRect()
+          const placeCard = screen.querySelector('.map-place-card, .map-empty-scope')?.getBoundingClientRect()
+          if (placeCard) screen.style.setProperty('--map-attribution-bottom', `${bounds.bottom - placeCard.top + 6}px`)
+          const topPadding = Math.ceil((topPanel?.bottom ?? bounds.top) - bounds.top + 56)
+          const bottomPadding = Math.ceil(bounds.bottom - (bottomPanel?.top ?? bounds.bottom) + 16)
           const routeOverlays = typeof map.getAllOverlays === 'function'
             ? (map.getAllOverlays('polyline') || [])
             : []
           const overlays = [...markerEntries, ...(currentMarker ? [currentMarker] : []), ...routeOverlays]
-          if (overlays.length > 1) map.setFitView(overlays, false, [140, 36, 210, 36], 14)
+          // AMap uses top, bottom, left, right (not CSS shorthand order).
+          if (overlays.length) map.setFitView(overlays, false, [topPadding, bottomPadding, 32, 32], 14)
         }
         const scheduleRouteFit = () => {
           window.requestAnimationFrame(() => window.requestAnimationFrame(fitCompleteRoute))
         }
+        if (typeof ResizeObserver !== 'undefined') {
+          resizeObserver = new ResizeObserver(scheduleRouteFit)
+          const screen = containerRef.current.closest('.map-screen')
+          const observedPanels = [containerRef.current, screen?.querySelector('.map-top-panel'), screen?.querySelector('.map-bottom-panel')]
+          observedPanels.filter(Boolean).forEach(node => resizeObserver.observe(node))
+        }
 
         const spreadOverlappingMarkers = () => {
+          if (cancelled) return
           const entries = places.map(place => {
             const pixel = map.lngLatToContainer(new AMap.LngLat(...placePosition(place, cityCode)))
             return { id: place.id, x: pixel?.x ?? pixel?.getX?.(), y: pixel?.y ?? pixel?.getY?.() }
@@ -2995,34 +3015,46 @@ function AMapCanvas({ city, cityCode, transportMode, places, routeIds, visited, 
             path: [placePosition(origin, cityCode), placePosition(destination, cityCode)],
             strokeColor: '#f26835', strokeOpacity: 0.55, strokeWeight: 3, strokeStyle: 'dashed', showDir: true, zIndex: 60
           }))
-          const routePathFromResult = (isDriving, result) => {
-            if (isDriving) return (result?.routes?.[0]?.steps || []).flatMap(step => step.path || [])
-            return (result?.plans?.[0]?.segments || []).flatMap(segment => segment.transit?.path || [])
+          const routePathsFromResult = (isDriving, result) => {
+            // WALK, BUS and SUBWAY segments each contain their own transit.path.
+            // Preserve separate paths so an unknown segment is never bridged
+            // by a solid line between two known segments.
+            const parts = isDriving ? result?.routes?.[0]?.steps : result?.plans?.[0]?.segments
+            return (parts || []).map(part => isDriving ? part.path : part.transit?.path)
           }
           routePlaces.slice(1).forEach((destination, index) => {
             const origin = routePlaces[index]
             const isDriving = transportMode === 'drive'
+            // Draw results only after the lifetime check below. Giving the
+            // service a map lets late responses render into a destroyed map.
             const planner = isDriving
-              ? new AMap.Driving({ map, hideMarkers: true, autoFitView: false, policy: AMap.DrivingPolicy?.LEAST_TIME ?? 0, showTraffic: false })
-              : new AMap.Transfer({ map, city: city === '新疆' ? '650000' : city, hideMarkers: true, autoFitView: false, policy: AMap.TransferPolicy?.LEAST_TIME ?? 0, nightflag: true, extensions: 'all' })
+              ? new AMap.Driving({ policy: AMap.DrivingPolicy?.LEAST_TIME ?? 0, showTraffic: false })
+              : new AMap.Transfer({ city: city === '新疆' ? '650000' : city, policy: AMap.TransferPolicy?.LEAST_TIME ?? 0, nightflag: true, extensions: 'all' })
             planner.search(new AMap.LngLat(...placePosition(origin, cityCode)), new AMap.LngLat(...placePosition(destination, cityCode)), (routeStatus, routeResult) => {
               if (cancelled) return
               if (routeStatus !== 'complete') {
                 hasFallbackLeg = true
                 drawFallbackLeg(origin, destination)
               } else {
-                const routePath = routePathFromResult(isDriving, routeResult)
-                if (routePath.length > 1) map.add(new AMap.Polyline({
-                  path: routePath,
-                  strokeColor: '#1683e8',
-                  strokeOpacity: 0.94,
-                  strokeWeight: 5,
-                  strokeStyle: 'solid',
-                  lineJoin: 'round',
-                  lineCap: 'round',
-                  showDir: true,
-                  zIndex: 72
-                }))
+                const routePaths = routePathsFromResult(isDriving, routeResult)
+                const knownPaths = routePaths.filter(path => Array.isArray(path) && path.length > 1)
+                if (knownPaths.length) {
+                  knownPaths.forEach(path => map.add(new AMap.Polyline({
+                    path,
+                    strokeColor: '#1683e8',
+                    strokeOpacity: 0.94,
+                    strokeWeight: 5,
+                    strokeStyle: 'solid',
+                    lineJoin: 'round',
+                    lineCap: 'round',
+                    showDir: true,
+                    zIndex: 72
+                  })))
+                  if (knownPaths.length !== routePaths.length) hasFallbackLeg = true
+                } else {
+                  hasFallbackLeg = true
+                  drawFallbackLeg(origin, destination)
+                }
               }
               pendingLegs -= 1
               if (pendingLegs === 0) {
@@ -3035,7 +3067,7 @@ function AMapCanvas({ city, cityCode, transportMode, places, routeIds, visited, 
 
         if (Array.isArray(userPosition)) {
           AMap.convertFrom(userPosition, 'gps', (convertStatus, result) => {
-            if (convertStatus !== 'complete' || !result.locations?.[0]) return
+            if (cancelled || convertStatus !== 'complete' || !result.locations?.[0]) return
             currentMarker = new AMap.Marker({
               position: result.locations[0],
               content: '<span class="amap-current-position"><span></span></span>',
@@ -3062,6 +3094,7 @@ function AMapCanvas({ city, cityCode, transportMode, places, routeIds, visited, 
 
     return () => {
       cancelled = true
+      resizeObserver?.disconnect()
       markersRef.current.clear()
       mapRef.current?.destroy()
       mapRef.current = null
@@ -3105,9 +3138,17 @@ function MapScreen({ trip, cityCode, places, plan, visited, dayLabel = '今天',
   useEffect(() => { setAmapStatus(usesDomesticMap ? 'loading' : 'fallback') }, [cityCode, usesDomesticMap])
   useEffect(() => { setRouteStatus(routeIds.length > 1 ? 'loading' : 'none') }, [cityCode, scope, routeIds.join('|')])
   const fallbackActive = !usesDomesticMap || amapStatus !== 'ready'
+  const routeSummary = routeStatus === 'loading' ? '正在生成路线'
+    : routeStatus === 'ready' ? `高德路线 · ${userPosition ? '当前位置 → ' : ''}${scopedPlaces.filter(place => !visited.includes(place.id)).map(place => place.name).join(' → ')}`
+      : routeStatus === 'partial' ? '部分路段暂未取得导航路线，虚线只表示地点顺序'
+        : '选择两个以上地点后显示路线'
   const districts = { XINJIANG: ['URUMQI', 'ALTAY', 'ILI'], DALI: ['CANGSHAN', 'ERHAI', 'XIZHOU'], CHENGDU: ['QINGYANG', 'JINJIANG', 'CHENGHUA'], TOKYO: ['HARAJUKU', 'SHIBUYA', 'AOYAMA'], KYOTO: ['ARASHIYAMA', 'NAKAGYO', 'HIGASHIYAMA'], SEOUL: ['JONGNO', 'SEONGSU', 'JUNG-GU'] }[cityCode] || [cityCode, 'CITY CENTER', 'OLD TOWN']
   return <div className="map-screen enter">
-    <header className="floating-map-head"><div><span className="eyebrow">{scope === 'today' ? `${dayLabel}路线` : '全程路线'} · {scopedPlaces.length} 个地点</span><h1>{trip.city}行程地图</h1></div>{readOnly ? <span className="map-readonly-label"><Lock/>只读</span> : <button className="round-add" aria-label="添加地点" onClick={onAdd}><Plus/></button>}</header>
+    <div className="map-top-panel">
+      <header className="floating-map-head"><div><h1>{trip.city}行程地图</h1><span className="eyebrow">{scope === 'today' ? `${dayLabel}路线` : '全程路线'} · {scopedPlaces.length} 个地点</span></div>{readOnly ? <span className="map-readonly-label"><Lock/>只读</span> : <button className="round-add" aria-label="添加地点" onClick={onAdd}><Plus/></button>}</header>
+      <div className="map-scope" aria-label="地图范围"><button className={scope === 'today' ? 'active' : ''} onClick={() => setScope('today')}>{dayLabel}</button><button className={scope === 'full' ? 'active' : ''} onClick={() => setScope('full')}>全程</button><button className={userPosition ? 'located' : ''} onClick={onLocate} aria-label="定位当前位置"><LocateFixed/></button></div>
+      <div className={`map-route-state ${routeStatus}`} role="status"><Navigation/><span title={routeSummary}>{routeSummary}</span></div>
+    </div>
     <div className="map-canvas">
       <div className="map-fallback" aria-hidden={!fallbackActive} inert={!fallbackActive}><div className="map-roads road-a"/><div className="map-roads road-b"/><div className="map-roads road-c"/><div className="map-water"/><span className="district d1">{districts[0]}</span><span className="district d2">{districts[1]}</span><span className="district d3">{districts[2]}</span>{scopedPlaces.map((place, index) => {
         const isDone = visited.includes(place.id)
@@ -3117,11 +3158,10 @@ function MapScreen({ trip, cityCode, places, plan, visited, dayLabel = '今天',
         ? <AMapCanvas city={trip.city} cityCode={cityCode} transportMode={transportMode} places={scopedPlaces} routeIds={routeIds} visited={visited} selectedId={selected?.id} userPosition={userPosition} onSelect={place => setSelectedId(place.id)} onStatusChange={setAmapStatus} onRouteStatusChange={setRouteStatus}/>
         : <div className="map-load-state">该目的地暂不支持路线地图</div>}
     </div>
-    <div className="map-scope" aria-label="地图范围"><button className={scope === 'today' ? 'active' : ''} onClick={() => setScope('today')}>{dayLabel}</button><button className={scope === 'full' ? 'active' : ''} onClick={() => setScope('full')}>全程</button><button className={userPosition ? 'located' : ''} onClick={onLocate} aria-label="定位当前位置"><LocateFixed/></button></div>
-    <div className="map-legend"><span><i className="must"/>必去</span><span><i/>想去</span><span><i className="done"/>已去</span></div>
-    <div className={`map-route-state ${routeStatus}`} role="status"><Navigation/><span>{routeStatus === 'loading' ? '正在生成路线' : routeStatus === 'ready' ? `高德路线 · ${userPosition ? '当前位置 → ' : ''}${scopedPlaces.filter(place => !visited.includes(place.id)).map(place => place.name).join(' → ')}` : routeStatus === 'partial' ? '实线是高德路线，虚线只表示地点顺序' : '选择两个以上地点后显示路线'}</span></div>
-    {amapStatus === 'ready' && routeStatus === 'partial' && <div className="map-route-warning"><Clock3/>部分路段暂未取得导航路线，虚线只表示地点顺序</div>}
-    {selected ? <div className="map-place-card"><button aria-label={`查看 ${selected.name}`} className={`mini-art tone-${selected.tone}`} onClick={() => onDetails(selected.id)}><MapPin/></button><button className="map-card-copy" onClick={() => onDetails(selected.id)}><small>{selected.category} · {routeStatus === 'ready' ? '高德路线已显示' : '路线待计算'}</small><strong>{selected.name}</strong><span>{placeOpenLabel(selected)}</span></button><button aria-label={`查看 ${selected.name}`} onClick={() => onDetails(selected.id)}><ArrowRight size={18}/></button></div> : <div className="map-empty-scope">{scope === 'today' ? `${dayLabel}还没有安排地点` : '全程还没有安排地点'}</div>}
+    <div className="map-bottom-panel">
+      <div className="map-legend"><span><i className="must"/>必去</span><span><i/>想去</span><span><i className="done"/>已去</span></div>
+      {selected ? <div className="map-place-card"><button aria-label={`查看 ${selected.name}`} className={`mini-art tone-${selected.tone}`} onClick={() => onDetails(selected.id)}><MapPin/></button><button className="map-card-copy" onClick={() => onDetails(selected.id)}><small>{selected.category} · {placeOpenLabel(selected)}</small><strong>{selected.name}</strong></button><button aria-label={`查看 ${selected.name}`} onClick={() => onDetails(selected.id)}><ArrowRight size={18}/></button></div> : <div className="map-empty-scope">{scope === 'today' ? `${dayLabel}还没有安排地点` : '全程还没有安排地点'}</div>}
+    </div>
   </div>
 }
 
@@ -3879,10 +3919,10 @@ function CreateTripScreen({ onBack, onDone, onSignal }) {
     <div className="create-progress" aria-hidden="true">{Array.from({ length: totalSteps }, (_, index) => index + 1).map(value => <span className={value <= step ? 'active' : ''} key={value}/>)}</div>
 
     {step === 1 && <section className="form-stage create-stage create-basics-stage">
-      <h1>去哪，<br/>玩几天？</h1>
+      <h1>去哪，玩几天？</h1>
       <label>目的地（城市 / 地区）<div className="destination-input"><MapPin/><input autoFocus value={city} onChange={event => setCity(event.target.value)} placeholder="例如：杭州或大理"/></div></label>
-      <div className="two-inputs"><label>出发日期<input type="date" value={startDate} onChange={event => setStartDate(event.target.value)}/></label><label>返程日期<input type="date" value={endDate} min={startDate} onChange={event => setEndDate(event.target.value)}/></label></div>
-      <div className="edge-time-fields"><div><strong>出发与首末日时间</strong><small>选填 · 用于检查首末日是否来得及</small></div><label className="edge-origin">从哪个城市出发<input value={origin} onChange={event => setOrigin(event.target.value)} placeholder="例如：上海"/></label><div className="two-inputs"><label>抵达目的地<input type="time" value={arrivalTime} onChange={event => setArrivalTime(event.target.value)}/></label><label>离开目的地<input type="time" value={departureTime} onChange={event => setDepartureTime(event.target.value)}/></label></div></div>
+      <div className="two-inputs trip-date-row"><TripDateField label="出发日期" value={startDate} onChange={event => setStartDate(event.target.value)}/><TripDateField label="返程日期" value={endDate} min={startDate} onChange={event => setEndDate(event.target.value)}/></div>
+      <div className="edge-time-fields"><div><strong>出发与首末日时间</strong><small>选填</small></div><p className="edge-time-hint">用于检查抵达、返程当天是否来得及</p><label className="edge-origin">从哪个城市出发<input value={origin} onChange={event => setOrigin(event.target.value)} placeholder="例如：上海"/></label><div className="two-inputs"><label>抵达目的地<input type="time" value={arrivalTime} onChange={event => setArrivalTime(event.target.value)}/></label><label>离开目的地<input type="time" value={departureTime} onChange={event => setDepartureTime(event.target.value)}/></label></div></div>
       <div className="people-field"><span>出行人数</span><div><button aria-label="减少人数" onClick={() => setPeople(value => Math.max(1, value - 1))}>−</button><strong>{people} 人</strong><button aria-label="增加人数" onClick={() => setPeople(value => Math.min(12, value + 1))}>＋</button></div></div>
       {flowError && <div className="flow-error" role="alert">{flowError}</div>}
       <button className="form-next" disabled={!city.trim() || !days} onClick={finishBasics}>继续</button>
