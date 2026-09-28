@@ -9,6 +9,7 @@ function parseDurationMinutes(value) {
 }
 
 function send(res, status, payload) {
+  if (res.writableEnded || res.destroyed) return
   res.statusCode = status
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.end(JSON.stringify(payload))
@@ -16,16 +17,56 @@ function send(res, status, payload) {
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
-    let body = ''
+    let bytes = 0
+    let tooLarge = false
+    const chunks = []
     req.on('data', chunk => {
-      body += chunk
-      if (body.length > MAX_BODY_BYTES) reject(new Error('请求内容过大'))
+      bytes += Buffer.byteLength(chunk)
+      if (bytes > MAX_BODY_BYTES) {
+        if (!tooLarge) reject(Object.assign(new Error('请求内容过大'), { status: 413 }))
+        tooLarge = true
+        chunks.length = 0
+      } else if (!tooLarge) chunks.push(Buffer.from(chunk))
     })
     req.on('end', () => {
-      try { resolve(JSON.parse(body || '{}')) } catch { reject(new Error('请求格式不正确')) }
+      if (tooLarge) return
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')) } catch { reject(new Error('请求格式不正确')) }
     })
+    req.on('aborted', () => reject(new Error('请求已取消')))
     req.on('error', reject)
   })
+}
+
+async function requestCompletion(config, messages, maxTokens) {
+  if (!config.apiKey) throw Object.assign(new Error('DeepSeek 尚未配置'), { status: 503 })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs || 45000)
+  const onClose = () => controller.abort()
+  config.signal?.addEventListener('abort', onClose, { once: true })
+  if (config.signal?.aborted) controller.abort()
+  try {
+    const response = await (config.fetch || fetch)('https://api.deepseek.com/chat/completions', {
+      method: 'POST', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
+      body: JSON.stringify({
+        model: config.model || 'deepseek-v4-flash',
+        thinking: { type: 'disabled' }, response_format: { type: 'json_object' }, max_tokens: maxTokens, messages
+      })
+    })
+    if (!response.ok) throw new Error('upstream rejected request')
+    const payload = await response.json()
+    const content = payload.choices?.[0]?.message?.content
+    if (!content) throw new Error('missing completion')
+    return JSON.parse(content)
+  } catch (error) {
+    // Provider responses can contain account details; only expose stable recovery copy.
+    throw Object.assign(new Error(error.name === 'AbortError' ? 'AI 规划超时，请稍后重试' : 'AI 服务暂时不可用，请稍后重试'), {
+      status: error.name === 'AbortError' ? 504 : 502
+    })
+  } finally {
+    clearTimeout(timeout)
+    config.signal?.removeEventListener('abort', onClose)
+  }
 }
 
 function validateInput(input) {
@@ -83,41 +124,37 @@ export function validatePlan(plan, input) {
   return { days, summary: String(plan.summary || '').slice(0, 240), provider: 'deepseek', checks: { maxStops: capacity, warnings } }
 }
 
-export function deepSeekPlanMiddleware(config = {}) {
-  return async function handleDeepSeekPlan(req, res, next) {
+function createMiddleware(generate, config) {
+  return async function handleDeepSeek(req, res, next) {
     if (req.method !== 'POST') return next?.()
-    const apiKey = config.apiKey || process.env.DEEPSEEK_API_KEY
+    const apiKey = config.apiKey ?? process.env.DEEPSEEK_API_KEY
     if (!apiKey) return send(res, 503, { error: 'DeepSeek 尚未配置' })
-
+    const controller = new AbortController()
+    const onClose = () => controller.abort()
+    res.once('close', onClose)
     try {
-      const input = validateInput(await readJson(req))
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 45000)
-      const response = await fetch('https://api.deepseek.com/chat/completions', {
-        method: 'POST',
-        signal: controller.signal,
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model: config.model || process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash',
-          thinking: { type: 'disabled' },
-          response_format: { type: 'json_object' },
-          max_tokens: 2400,
-          messages: [
-            { role: 'system', content: '你是旅行路线规划助手。只能使用用户提供的真实地点 ID，不得编造地点、营业时间、价格、评分或交通事实。输出 JSON，格式为 {"days":[{"dayIndex":0,"placeIds":["id"],"note":"简短安排理由"}],"summary":"简短说明"}。优先保留必去和预约地点，结合坐标减少折返；每一天尽量不超过 maxStops，并结合 durationMinutes、closes 与 dayStartTime 避免明显超时或闭馆冲突。所有地点恰好出现一次；未知信息保持未知。' },
-            { role: 'user', content: JSON.stringify(input) }
-          ]
-        })
-      }).finally(() => clearTimeout(timeout))
-
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.error?.message || `DeepSeek 请求失败（${response.status}）`)
-      const content = payload.choices?.[0]?.message?.content
-      if (!content) throw new Error('DeepSeek 没有返回路线')
-      send(res, 200, validatePlan(JSON.parse(content), input))
+      send(res, 200, await generate(await readJson(req), {
+        ...config, apiKey, model: config.model || process.env.DEEPSEEK_MODEL, signal: controller.signal
+      }))
     } catch (error) {
-      send(res, error.name === 'AbortError' ? 504 : 400, { error: error.name === 'AbortError' ? 'DeepSeek 请求超时' : error.message })
+      send(res, error.status || 400, { error: error.message })
+    } finally {
+      res.off('close', onClose)
     }
   }
+}
+
+export async function generatePlan(rawInput, config = {}) {
+  const input = validateInput(rawInput)
+  const plan = await requestCompletion(config, [
+    { role: 'system', content: '你是旅行路线规划助手。只能使用用户提供的真实地点 ID，不得编造地点、营业时间、价格、评分或交通事实。输出 JSON，格式为 {"days":[{"dayIndex":0,"placeIds":["id"],"note":"简短安排理由"}],"summary":"简短说明"}。优先保留必去和预约地点，结合坐标减少折返；每一天尽量不超过 maxStops，并结合 durationMinutes、closes 与 dayStartTime 避免明显超时或闭馆冲突。所有地点恰好出现一次；未知信息保持未知。' },
+    { role: 'user', content: JSON.stringify(input) }
+  ], 2400)
+  return validatePlan(plan, input)
+}
+
+export function deepSeekPlanMiddleware(config = {}) {
+  return createMiddleware(generatePlan, config)
 }
 
 function validateReplanInput(input) {
@@ -179,33 +216,14 @@ export function validateReplan(result, input) {
 }
 
 export function deepSeekReplanMiddleware(config = {}) {
-  return async function handleDeepSeekReplan(req, res, next) {
-    if (req.method !== 'POST') return next?.()
-    const apiKey = config.apiKey || process.env.DEEPSEEK_API_KEY
-    if (!apiKey) return send(res, 503, { error: 'DeepSeek 尚未配置' })
-    try {
-      const input = validateReplanInput(await readJson(req))
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 45000)
-      const response = await fetch('https://api.deepseek.com/chat/completions', {
-        method: 'POST', signal: controller.signal,
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model: config.model || process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash', thinking: { type: 'disabled' },
-          response_format: { type: 'json_object' }, max_tokens: 1600,
-          messages: [
-            { role: 'system', content: '你是旅行中的实时行程调整助手。只能使用用户提供的地点 ID，不得编造地点、营业时间、票价、评分、距离或交通事实。理解用户的自然语言变化，输出 JSON：{"conditionKey":"rain|tired|hungry|late|skip|closed|custom","title":"对用户的简短回应","explanation":"调整理由","placeIds":["调整后仍保留的未完成地点ID，按新顺序排列"]}。placeIds 是完整的调整结果，省略某个未锁定 ID 就表示从今天移除该站。已完成地点不参与排序；预约和锁定地点必须保留且不能改变位置；用户说累了或晚了时应优先减少未锁定站点，说不想去或临时关闭时应移除当前未锁定站点；信息不足时保持原顺序。' },
-            { role: 'user', content: JSON.stringify(input) }
-          ]
-        })
-      }).finally(() => clearTimeout(timeout))
-      const payload = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(payload.error?.message || `DeepSeek 请求失败（${response.status}）`)
-      const content = payload.choices?.[0]?.message?.content
-      if (!content) throw new Error('DeepSeek 没有返回调整方案')
-      send(res, 200, validateReplan(JSON.parse(content), input))
-    } catch (error) {
-      send(res, error.name === 'AbortError' ? 504 : 400, { error: error.name === 'AbortError' ? 'DeepSeek 请求超时' : error.message })
-    }
-  }
+  return createMiddleware(generateReplan, config)
+}
+
+export async function generateReplan(rawInput, config = {}) {
+  const input = validateReplanInput(rawInput)
+  const result = await requestCompletion(config, [
+    { role: 'system', content: '你是旅行中的实时行程调整助手。只能使用用户提供的地点 ID，不得编造地点、营业时间、票价、评分、距离或交通事实。理解用户的自然语言变化，输出 JSON：{"conditionKey":"rain|tired|hungry|late|skip|closed|custom","title":"对用户的简短回应","explanation":"调整理由","placeIds":["调整后仍保留的未完成地点ID，按新顺序排列"]}。placeIds 是完整的调整结果，省略某个未锁定 ID 就表示从今天移除该站。已完成地点不参与排序；预约和锁定地点必须保留且不能改变位置；用户说累了或晚了时应优先减少未锁定站点，说不想去或临时关闭时应移除当前未锁定站点；信息不足时保持原顺序。' },
+    { role: 'user', content: JSON.stringify(input) }
+  ], 1600)
+  return validateReplan(result, input)
 }

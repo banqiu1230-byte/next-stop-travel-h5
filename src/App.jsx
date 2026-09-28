@@ -8,8 +8,11 @@ import {
   Sparkles, Star, ThumbsDown, ThumbsUp, TicketCheck, TrainFront, Trash2, Undo2, Unlock,
   UtensilsCrossed, WalletCards, WifiOff, X, Zap
 } from 'lucide-react'
-import { conditionMeta, formatTravelTime, getTransport, initialPlan, placesByTripSeed, placesSeed, previewConditionChange, sortForCondition } from './trip-data'
+import { conditionMeta, formatTravelTime, getTransport, initialPlan, placesByTripSeed, previewConditionChange, sortForCondition } from './trip-data'
 import { requestAiPlan, requestAiReplan } from './ai-planner'
+import { restoreTripState } from './trip-state'
+import { configureAMap } from './service-config'
+import './empty-trip.css'
 
 const tabs = [
   { id: 'today', label: '行程', icon: Home },
@@ -617,11 +620,12 @@ const conditionIcons = {
 const amapSearchCache = new Map()
 
 function loadAMap(plugins = []) {
-  const key = import.meta.env.VITE_AMAP_KEY
-  const securityJsCode = import.meta.env.VITE_AMAP_SECURITY_JS_CODE
-  if (!key || !securityJsCode) return Promise.reject(new Error('地图凭证未配置'))
-  window._AMapSecurityConfig = { securityJsCode }
-  return AMapLoader.load({ key, version: '2.0', plugins })
+  try {
+    const key = configureAMap()
+    return AMapLoader.load({ key, version: '2.0', plugins })
+  } catch (error) {
+    return Promise.reject(error)
+  }
 }
 
 function poiCategory(type = '') {
@@ -1266,20 +1270,20 @@ function repairLegacyXinjiangRoute(state) {
 }
 
 export default function App() {
-  const saved = useMemo(() => repairLegacyChengduRoute(repairLegacyXinjiangRoute(loadState())), [])
+  const saved = useMemo(() => restoreTripState(repairLegacyChengduRoute(repairLegacyXinjiangRoute(restoreTripState(loadState())))), [])
   const clock = useCurrentClock()
   const online = useNetworkStatus()
   const deviceLocation = useDeviceLocation()
   const [tab, setTab] = useState('today')
   const [screen, setScreen] = useState('main')
-  const [placesByTrip, setPlacesByTrip] = useState(() => ({ ...placesByTripSeed, ...(saved.placesByTrip || {}), xinjiang: saved.placesByTrip?.xinjiang || saved.places || placesSeed }))
-  const [visitedByTrip, setVisitedByTrip] = useState(() => ({ xinjiang: saved.visitedByTrip?.xinjiang || saved.visited || [3], dali: [], chengdu: [], ...(saved.visitedByTrip || {}) }))
-  const [plansByTrip, setPlansByTrip] = useState(() => ({ xinjiang: saved.plansByTrip?.xinjiang || saved.dayPlan || initialPlan, dali: [], chengdu: [], ...(saved.plansByTrip || {}) }))
-  const [lockedByTrip, setLockedByTrip] = useState(() => ({ xinjiang: saved.lockedByTrip?.xinjiang || saved.locked || [6], dali: [], chengdu: [], ...(saved.lockedByTrip || {}) }))
-  const [conditionByTrip, setConditionByTrip] = useState(() => ({ [saved.activeTripId || 'xinjiang']: saved.condition || '', ...(saved.conditionByTrip || {}) }))
+  const [placesByTrip, setPlacesByTrip] = useState(saved.placesByTrip)
+  const [visitedByTrip, setVisitedByTrip] = useState(saved.visitedByTrip)
+  const [plansByTrip, setPlansByTrip] = useState(saved.plansByTrip)
+  const [lockedByTrip, setLockedByTrip] = useState(saved.lockedByTrip)
+  const [conditionByTrip, setConditionByTrip] = useState(saved.conditionByTrip)
   const [conditionRequestByTrip, setConditionRequestByTrip] = useState(() => saved.conditionRequestByTrip || {})
-  const [energyByTrip, setEnergyByTrip] = useState(() => ({ [saved.activeTripId || 'xinjiang']: saved.energy || 'normal', ...(saved.energyByTrip || {}) }))
-  const [journeyStageByTrip, setJourneyStageByTrip] = useState(() => ({ [saved.activeTripId || 'xinjiang']: saved.journeyStage || 'ready', ...(saved.journeyStageByTrip || {}) }))
+  const [energyByTrip, setEnergyByTrip] = useState(saved.energyByTrip)
+  const [journeyStageByTrip, setJourneyStageByTrip] = useState(saved.journeyStageByTrip)
   const [journeyProgressByTrip, setJourneyProgressByTrip] = useState(saved.journeyProgressByTrip || {})
   const [selectedPlaceId, setSelectedPlaceId] = useState(1)
   const [searchPreview, setSearchPreview] = useState(null)
@@ -1290,8 +1294,8 @@ export default function App() {
   const [routeAddDay, setRouteAddDay] = useState(0)
   const [search, setSearch] = useState('')
   const [toast, setToast] = useState('')
-  const [trips, setTrips] = useState(saved.trips || initialTrips)
-  const [activeTripId, setActiveTripId] = useState(saved.activeTripId || 'xinjiang')
+  const [trips, setTrips] = useState(saved.trips)
+  const [activeTripId, setActiveTripId] = useState(saved.activeTripId)
   const [packingByTrip, setPackingByTrip] = useState(saved.packingByTrip || {})
   const [bookingByTrip, setBookingByTrip] = useState(saved.bookingByTrip || {})
   const [routeVersionsByTrip, setRouteVersionsByTrip] = useState(saved.routeVersionsByTrip || {})
@@ -1322,26 +1326,26 @@ export default function App() {
   const placeMap = useMemo(() => new Map(places.map(place => [place.id, place])), [places])
   const currentId = dayPlan.find(id => !visited.includes(id))
   const currentPlace = currentId ? placeMap.get(currentId) : null
-  const activeTripBase = trips.find(trip => trip.id === activeTripId) || trips[0]
-  const activeTripStays = getTripStays(activeTripBase)
+  const activeTripBase = trips.find(trip => trip.id === activeTripId) || trips[0] || null
+  const activeTripStays = activeTripBase ? getTripStays(activeTripBase) : []
   const usableTripPlaces = places.filter(place => !place.isHotel && place.category !== '住宿')
-  const fallbackDailyPlans = activeTripBase.dailyPlans?.some(day => day.length)
+  const fallbackDailyPlans = !activeTripBase ? [] : activeTripBase.dailyPlans?.some(day => day.length)
     ? activeTripBase.dailyPlans
     : buildFlexiblePlan(usableTripPlaces, activeTripBase.days, activeTripBase.pace || 'normal', null).map(group => group.map(place => place.id))
-  const activeDayIndex = Math.max(0, Math.min(fallbackDailyPlans.length - 1, (activeTripBase.currentDay || 1) - 1))
+  const activeDayIndex = Math.max(0, Math.min(fallbackDailyPlans.length - 1, (activeTripBase?.currentDay || 1) - 1))
   const currentDayIds = new Set(dayPlan)
-  const hasLiveDayState = ['旅行中', '已暂停'].includes(activeTripBase.status)
+  const hasLiveDayState = ['旅行中', '已暂停'].includes(activeTripBase?.status)
   const syncedDailyPlans = hasLiveDayState
     ? fallbackDailyPlans.map((day, index) => index === activeDayIndex ? [...dayPlan] : day.filter(id => !currentDayIds.has(id)))
     : fallbackDailyPlans.map(day => [...day])
-  const activeTrip = { ...activeTripBase, stays: activeTripStays, dailyPlans: syncedDailyPlans, saved: places.length, must: places.filter(place => place.priority === 'must').length }
-  const bookingTasks = (bookingByTrip[activeTripId] || bookingTasksForTrip(activeTrip, places)).filter(task => !(task.kind === 'transport' && normalizePlaceLabel(activeTrip.origin) === normalizePlaceLabel(activeTrip.city)))
+  const activeTrip = activeTripBase ? { ...activeTripBase, stays: activeTripStays, dailyPlans: syncedDailyPlans, saved: places.length, must: places.filter(place => place.priority === 'must').length } : null
+  const bookingTasks = activeTrip ? (bookingByTrip[activeTripId] || bookingTasksForTrip(activeTrip, places)).filter(task => !(task.kind === 'transport' && normalizePlaceLabel(activeTrip.origin) === normalizePlaceLabel(activeTrip.city))) : []
   const routeVersions = routeVersionsByTrip[activeTripId] || []
   const adviceFeedback = adviceFeedbackByTrip[activeTripId] || ''
   const currentPlanIndex = currentId ? dayPlan.indexOf(currentId) : -1
   const previousRoutePlace = currentPlanIndex > 0 ? placeMap.get(dayPlan[currentPlanIndex - 1]) : null
-  const currentTripDate = tripDateAtOffset(activeTrip.startDate, Math.max(0, (activeTrip.currentDay || 1) - 1))
-  const currentStay = stayForTripDate(activeTrip.stays, currentTripDate)
+  const currentTripDate = tripDateAtOffset(activeTrip?.startDate, Math.max(0, (activeTrip?.currentDay || 1) - 1))
+  const currentStay = stayForTripDate(activeTripStays, currentTripDate)
   const currentStayPlace = currentStay?.placeId ? placeMap.get(currentStay.placeId) : null
   const currentRouteOrigin = Array.isArray(deviceLocation.coords) ? { name: '当前位置', position: deviceLocation.coords } : previousRoutePlace || currentStayPlace
   const tripsWithCounts = trips.map(trip => ({ ...trip, stays: getTripStays(trip), saved: (placesByTrip[trip.id] || []).length, must: (placesByTrip[trip.id] || []).filter(place => place.priority === 'must').length }))
@@ -1939,26 +1943,32 @@ export default function App() {
     if (started) setProductSignals(value => ({ ...value, replans: (value.replans || 0) + 1 }))
   }
 
-  function resetDemo() {
-    if (!window.confirm('将清除你的全部修改，并恢复初始旅行。确定继续吗？')) return
+  function clearTravelData() {
+    if (!window.confirm('确定清除这台设备上的全部旅行吗？路线、地点、住宿、完成进度和未完成的规划草稿都会删除，且无法恢复。')) return
     localStorage.removeItem('next-stop-state-v3')
-    setPlacesByTrip(placesByTripSeed)
-    setVisitedByTrip({ xinjiang: [3], dali: [], chengdu: [] })
-    setPlansByTrip({ xinjiang: initialPlan, dali: [], chengdu: [] })
-    setLockedByTrip({ xinjiang: [6], dali: [], chengdu: [] })
-    setConditionByTrip({ xinjiang: '', dali: '', chengdu: '' })
+    localStorage.removeItem('next-stop-create-draft-v1')
+    setPlacesByTrip({})
+    setVisitedByTrip({})
+    setPlansByTrip({})
+    setLockedByTrip({})
+    setConditionByTrip({})
     setConditionRequestByTrip({})
-    setEnergyByTrip({ xinjiang: 'normal', dali: 'normal', chengdu: 'normal' })
-    setJourneyStageByTrip({ xinjiang: 'ready', dali: 'ready', chengdu: 'ready' })
+    setEnergyByTrip({})
+    setJourneyStageByTrip({})
     setJourneyProgressByTrip({})
     setPackingByTrip({})
     setBookingByTrip({})
     setRouteVersionsByTrip({})
     setAdviceFeedbackByTrip({})
     setProductSignals({ routeComparisons: 0, evidenceViews: 0, replans: 0, bookingConfirmed: 0, helpful: 0, unhelpful: 0 })
-    setTrips(initialTrips)
-    setActiveTripId('xinjiang')
-    setToast('已恢复初始旅行')
+    setTrips([])
+    setActiveTripId(null)
+    setLastRouteChange(null)
+    setRouteEditUndo(null)
+    setSearchPreview(null)
+    setScreen('main')
+    setTab('today')
+    setToast('已清除这台设备上的全部旅行')
   }
 
   function deleteTrip(tripId) {
@@ -1992,6 +2002,13 @@ export default function App() {
   }
 
   function renderScreen() {
+    if (screen === 'create') return <CreateTripScreen onBack={() => setScreen('main')} onSignal={key => setProductSignals(value => ({ ...value, [key]: (value[key] || 0) + 1 }))} onDone={({ trip, selectedPlaces, firstDayPlan, lockedIds, bookingTasks: createdBookingTasks }) => {
+      setTrips(items => [trip, ...items]); setPlacesByTrip(all => ({ ...all, [trip.id]: selectedPlaces })); setVisitedByTrip(all => ({ ...all, [trip.id]: [] })); setPlansByTrip(all => ({ ...all, [trip.id]: firstDayPlan })); setLockedByTrip(all => ({ ...all, [trip.id]: lockedIds })); setConditionByTrip(all => ({ ...all, [trip.id]: '' })); setConditionRequestByTrip(all => ({ ...all, [trip.id]: '' })); setEnergyByTrip(all => ({ ...all, [trip.id]: 'normal' })); setJourneyStageByTrip(all => ({ ...all, [trip.id]: 'ready' })); setBookingByTrip(all => ({ ...all, [trip.id]: createdBookingTasks || bookingTasksForTrip(trip, selectedPlaces) })); setRouteVersionsByTrip(all => ({ ...all, [trip.id]: [{ id: `version-${Date.now()}`, label: '初始路线', at: new Date().toISOString(), dailyPlans: trip.dailyPlans.map(day => [...day]), places: selectedPlaces.map(place => ({ ...place })), visited: [], locked: [...lockedIds] }] })); setActiveTripId(trip.id); setTab('today'); setScreen('main'); setToast(`${trip.city}路线已创建`)
+    }} />
+    if (!activeTrip) return <>
+      <main className="page-shell"><NoTripsScreen tab={tab} onCreate={() => setScreen('create')}/></main>
+      <BottomNav tab={tab} setTab={next => { setTab(next); setScreen('main') }}/>
+    </>
     if (screen === 'trip-route-view') return <TripOverviewScreen
       journeyView trip={activeTrip} places={places} visited={visited}
       packingChecked={packingChecked} onTogglePacking={togglePackingItem}
@@ -2106,10 +2123,6 @@ export default function App() {
       setToast(`已添加到${activeTrip.city}行程`)
     }} />
     if (screen === 'hotel') return <SelectHotelScreen trip={activeTrip} places={places} stays={activeTrip.stays} onBack={() => setScreen(hotelReturn)} onSelect={selectHotel} onUpdate={updateStay} onRemove={removeStay} />
-    if (screen === 'create') return <CreateTripScreen onBack={() => setScreen('main')} onSignal={key => setProductSignals(value => ({ ...value, [key]: (value[key] || 0) + 1 }))} onDone={({ trip, selectedPlaces, firstDayPlan, lockedIds, bookingTasks: createdBookingTasks }) => {
-      setTrips(items => [trip, ...items]); setPlacesByTrip(all => ({ ...all, [trip.id]: selectedPlaces })); setVisitedByTrip(all => ({ ...all, [trip.id]: [] })); setPlansByTrip(all => ({ ...all, [trip.id]: firstDayPlan })); setLockedByTrip(all => ({ ...all, [trip.id]: lockedIds })); setConditionByTrip(all => ({ ...all, [trip.id]: '' })); setConditionRequestByTrip(all => ({ ...all, [trip.id]: '' })); setEnergyByTrip(all => ({ ...all, [trip.id]: 'normal' })); setJourneyStageByTrip(all => ({ ...all, [trip.id]: 'ready' })); setBookingByTrip(all => ({ ...all, [trip.id]: createdBookingTasks || bookingTasksForTrip(trip, selectedPlaces) })); setRouteVersionsByTrip(all => ({ ...all, [trip.id]: [{ id: `version-${Date.now()}`, label: '初始路线', at: new Date().toISOString(), dailyPlans: trip.dailyPlans.map(day => [...day]), places: selectedPlaces.map(place => ({ ...place })), visited: [], locked: [...lockedIds] }] })); setActiveTripId(trip.id); setTab('today'); setScreen('main'); setToast(`${trip.city}路线已创建`)
-    }} />
-
     return <>
       <main className={tab === 'map' && places.length ? 'page-shell map-page-shell' : 'page-shell'}>
         {tab === 'today' && (activeTrip.status === '旅行中' || journeyStage === 'tripComplete' ? <TodayScreen
@@ -2131,7 +2144,7 @@ export default function App() {
           feedback={adviceFeedback} onFeedback={setAdviceFeedback}
         /> : <TripOverviewScreen trip={activeTrip} places={places} visited={visited} packingChecked={packingChecked} onTogglePacking={togglePackingItem} onSelectHotel={() => openHotel('main')} onMap={() => setTab('map')} onEditRoute={() => openRouteEditor('main')} onDetails={id => openDetails(id, 'main')} onStartNow={startTripNow} onStartEarly={startTripEarly} onSwitch={() => setTab('me')} bookingTasks={bookingTasks} onBookings={() => setScreen('booking')} routeVersions={routeVersions} onRestoreVersion={restoreTripVersion} />)}
         {tab === 'map' && (places.length ? <MapScreen trip={activeTrip} cityCode={activeTrip.cityCode} places={places} plan={dayPlan} visited={visited} dayLabel={journeyStage === 'dayPreview' ? `第 ${activeTrip.currentDay || 1} 天` : '今天'} userPosition={deviceLocation.coords} onLocate={deviceLocation.requestLocation} readOnly={activeTrip.status === '已完成'} onAdd={() => setScreen('add')} onDetails={id => openDetails(id, 'main')} /> : <TripPlacesEmpty trip={activeTrip} kind="地图" onAdd={() => setScreen('add')} />)}
-        {tab === 'me' && <MeScreen energy={energy} trips={tripsWithCounts} visitedByTrip={visitedByTrip} activeTripId={activeTripId} bookingTasks={bookingTasks} productSignals={productSignals} onBookings={() => setScreen('booking')} onSwitch={id => { setActiveTripId(id); setTab('today'); setToast(`已切换到 ${trips.find(trip => trip.id === id)?.title}`) }} onDelete={deleteTrip} onCreate={() => setScreen('create')} onHotel={() => openHotel('main')} onToday={() => setTab('today')} onReset={resetDemo} />}
+        {tab === 'me' && <MeScreen energy={energy} trips={tripsWithCounts} visitedByTrip={visitedByTrip} activeTripId={activeTripId} bookingTasks={bookingTasks} productSignals={productSignals} onBookings={() => setScreen('booking')} onSwitch={id => { setActiveTripId(id); setTab('today'); setToast(`已切换到 ${trips.find(trip => trip.id === id)?.title}`) }} onDelete={deleteTrip} onCreate={() => setScreen('create')} onHotel={() => openHotel('main')} onToday={() => setTab('today')} onReset={clearTravelData} />}
       </main>
       <BottomNav tab={tab} setTab={next => { setTab(next); setScreen('main') }} />
     </>
@@ -2142,6 +2155,25 @@ export default function App() {
     {!online && <div className="offline-banner" role="status"><WifiOff/><span>{networkStatusLabel(online)}</span></div>}
     {renderScreen()}
     {toast && <div className="toast" role="status" aria-live="polite"><Check size={17}/>{toast}</div>}
+  </div>
+}
+
+function NoTripsScreen({ tab, onCreate }) {
+  const content = {
+    today: { title: '此刻去哪', heading: '下一段旅行，\n从这里开始。', detail: '选好目的地和日期，一起安排每天去哪、怎么走。', icon: Compass },
+    map: { title: '行程地图', heading: '还没有旅行路线', detail: '创建旅行后，地点和每天的路线会出现在这里。', icon: MapIcon },
+    me: { title: '我的旅行', heading: '你的旅行，还未开始', detail: '计划中的旅程和走过的地方，都会收在这里。', icon: Bookmark }
+  }[tab]
+  const Icon = content.icon
+  return <div className={`screen no-trips-screen no-trips-${tab} enter`}>
+    <header className="topbar"><div><h1>{content.title}</h1></div>{tab === 'me' && <span className="avatar" aria-label="用户 W">W</span>}</header>
+    <section className="no-trips-content" aria-labelledby="no-trips-heading">
+      <div className="no-trips-mark" aria-hidden="true"><Icon strokeWidth={1.4}/></div>
+      <h2 id="no-trips-heading">{content.heading}</h2>
+      <p>{content.detail}</p>
+      <button className="form-next" onClick={onCreate}>创建旅行</button>
+    </section>
+    <p className="no-trips-note">{tab === 'me' ? '旅行保存在当前设备，随时回来继续规划。' : '还没做攻略也没关系，先从想去的城市开始。'}</p>
   </div>
 }
 
@@ -2848,9 +2880,10 @@ function AMapCanvas({ city, cityCode, transportMode, places, routeIds, visited, 
   useEffect(() => { onRouteStatusChangeRef.current = onRouteStatusChange }, [onRouteStatusChange])
 
   useEffect(() => {
-    const key = import.meta.env.VITE_AMAP_KEY
-    const securityJsCode = import.meta.env.VITE_AMAP_SECURITY_JS_CODE
-    if (!key || !securityJsCode) {
+    let key
+    try {
+      key = configureAMap()
+    } catch {
       setStatus('missing')
       onStatusChangeRef.current?.('missing')
       onRouteStatusChangeRef.current?.('fallback')
@@ -2860,7 +2893,6 @@ function AMapCanvas({ city, cityCode, transportMode, places, routeIds, visited, 
     let cancelled = false
     setStatus('loading')
     onStatusChangeRef.current?.('loading')
-    window._AMapSecurityConfig = { securityJsCode }
 
     AMapLoader.load({ key, version: '2.0', plugins: ['AMap.Transfer', 'AMap.Driving'] })
       .then(AMap => {
@@ -3457,7 +3489,7 @@ function MeScreen({ energy, trips, visitedByTrip, activeTripId, bookingTasks = [
         {pending && <div className="trip-delete-confirm" role="alertdialog" aria-label={`确认删除 ${trip.title}`}><div><strong>删除「{trip.title}」？</strong><span>{trip.dates} 的路线、地点和进度会一起删除。</span></div><div><button onClick={() => setPendingDeleteId(null)}>取消</button><button className="danger" onClick={() => { onDelete(trip.id); setPendingDeleteId(null); if (others.length === 1) setManagingTrips(false) }}>确认删除</button></div></div>}
       </article>
     })}</section>}
-    <button className="reset-demo" onClick={onReset}><RotateCcw/>清除修改并恢复初始行程</button><p className="brand-foot">此刻去哪 · AI 负责想，你负责玩</p>
+    <button className="reset-demo" onClick={onReset}><Trash2/>清除本机全部旅行</button><p className="brand-foot">此刻去哪 · AI 负责想，你负责玩</p>
   </div>
 }
 

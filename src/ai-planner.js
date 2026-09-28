@@ -1,5 +1,7 @@
+import { apiUrl } from './service-config'
+
 export async function requestAiPlan(input) {
-  const response = await fetch('/api/ai/plan', {
+  const response = await fetch(apiUrl('/api/ai/plan'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input)
@@ -21,7 +23,7 @@ export async function requestAiPlan(input) {
 }
 
 export async function requestAiReplan(input) {
-  const response = await fetch('/api/ai/replan', {
+  const response = await fetch(apiUrl('/api/ai/replan'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input)

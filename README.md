@@ -15,6 +15,7 @@
 
 ## 核心体验
 
+- 新用户从空白行程开始，创建后只展示自己的旅行
 - 从目的地、日期、同行人与旅行偏好生成多套可比较路线
 - 将 AI 推荐理由、来源与未知信息显式呈现，避免把推测写成事实
 - 以“下一站”为核心组织当天执行，衔接实时路线、到达与停留状态
@@ -45,7 +46,14 @@ npm run build
 - `VITE_AMAP_KEY` 与 `VITE_AMAP_SECURITY_JS_CODE`：高德地图与路线
 - `DEEPSEEK_API_KEY`：仅由本地 Vite 服务端代理读取，不进入浏览器构建产物
 
-GitHub Pages 会在没有密钥时使用产品内置的降级体验。若需要在线地图，可在仓库 Actions secrets 中配置两个高德变量。
+线上页面通过独立的服务端接口调用 DeepSeek 与高德地图，原体验链接和二维码保持不变。
+
+- GitHub Actions variables：`VITE_AMAP_KEY`（公开的 JS API 标识）、`VITE_AMAP_SERVICE_HOST`、`VITE_API_BASE_URL`
+- 服务端运行环境：`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`、`AMAP_KEY`、`AMAP_SECURITY_JS_CODE`、`ALLOWED_ORIGINS`
+- DeepSeek 密钥和高德安全码保存在托管服务的加密配置中，不进入源码或浏览器构建产物。
+- Pages 随 `main` 更新自动发布；服务端通过 Sites 发布，`npm run build:hosted` 构建对应产物。
+
+接口包含请求体上限、超时、来源检查与基本限流；提供商不可用时保留明确的失败反馈。旅行数据目前保存在用户自己的浏览器中，不支持跨设备同步。
 
 ## 项目结构
 

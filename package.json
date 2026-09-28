@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
+    "build:hosted": "node scripts/build-hosted.mjs",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "node server/deepseek.test.mjs && node src/trip-data.test.mjs"
+    "test": "node server/deepseek.test.mjs && node src/trip-data.test.mjs && node src/trip-state.test.mjs && node --test server/worker.test.mjs"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
@@ -16,5 +17,8 @@
     "react": "latest",
     "react-dom": "latest",
     "vite": "latest"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }
