@@ -3,6 +3,42 @@
 :root { --nav-height: calc(64px + env(safe-area-inset-bottom, 0px)); }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
+/* A native form must not sit in a locked root plus a second scroll viewport.
+   On iOS, focusing date/text inputs can pan even an overflow:hidden body,
+   leaving the fixed-height shell clipped when the keyboard closes. */
+html.document-form-flow,
+.document-form-flow body,
+.document-form-flow #root {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+.document-form-flow .app-frame.standalone-flow {
+  height: auto;
+  min-height: 100dvh;
+  overflow: visible;
+}
+.document-form-flow .standalone-flow > .screen,
+.document-form-flow .standalone-flow > .detail-screen {
+  height: auto;
+  min-height: 100dvh;
+  overflow: visible;
+}
+.document-form-flow .preference-note-field textarea,
+.document-form-flow .intent-grid input,
+.document-form-flow .planner-search input,
+.document-form-flow .anchor-settings input,
+.document-form-flow .advanced-preferences input {
+  font-size: 16px !important;
+}
+@media (min-width: 700px) {
+  .document-form-flow .app-frame.standalone-flow,
+  .document-form-flow .standalone-flow > .screen,
+  .document-form-flow .standalone-flow > .detail-screen {
+    min-height: calc(100dvh - 44px);
+  }
+}
+
 .screen { padding-left: 20px; padding-right: 20px; }
 .topbar {
   height: auto;

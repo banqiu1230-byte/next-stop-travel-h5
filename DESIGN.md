@@ -30,7 +30,7 @@
 - 4pt base scale: 4 / 8 / 12 / 16 / 24 / 32 / 40 / 48 / 64px.
 - Page gutter: 20px; compact screens down to 16px at 360px and below.
 - Related content gap: 8–12px; component gap: 12–16px; section gap: 24–28px on journey/profile screens, 40px in longer editorial detail views.
-- App shell fills the visible viewport and must never create document-level vertical scrolling.
+- Tabbed app screens fill the visible viewport without document-level vertical scrolling. The trip-creation form uses native document scrolling instead of a fixed-height nested scroller so iOS can manage input focus, date pickers and keyboard dismissal without clipping the page.
 - Bottom navigation occupies its own 64px layout row plus the device bottom safe area; tab content ends at its upper edge and never renders underneath it. Headers use 80px (72px in short viewports) plus the top safe area.
 - Validate mobile density in the actual browser content viewport: a 393×852 phone can have only about 393×672 available in an embedded browser. Do not use page zoom or transforms to fit controls; preserve 44px touch targets and 52px primary actions. Browser pinch zoom must remain enabled.
 - Journey cards use content-driven height, not fixed-height image blocks or absolute action offsets. Long place names and larger text must push actions down naturally and remain scrollable.
@@ -64,7 +64,7 @@
 - Confirming the proposal creates the usable trip plan. Never send users to another page to “organize” it before it exists.
 - “Reorganize route” is a secondary action shown only after a route exists, for cases where places or preferences have changed.
 - Long provider-result lists scroll inside a bounded region. The selected-place count and route action remain visible in a sticky footer.
-- Every stage change resets the flow's internal scroll position to the top.
+- Every stage change resets the creation flow's document scroll position to the top. Entering the form must not automatically open the mobile keyboard; users tap the destination field to begin typing.
 - Route generation may group and order selected places, but must label unknown travel time, price, opening hours, photos, and reviews as unknown instead of inventing values.
 - Planning asks for an optional daily start time. The route review turns it into editable suggested arrival ranges, stay durations, previous-stop departure times, and movement reserves; it flags appointment, closing-time, and excessively late-finish conflicts before the trip is created.
 - Suggested schedule values are planning estimates, not live facts. Travel-day screens replace them with provider-backed routes after location is granted; when a route cannot be calculated, write “出发时计算” or “路线待计算” and never fall back to a fabricated duration.

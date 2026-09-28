@@ -3571,6 +3571,13 @@ const travelConstraintMeta = {
 
 function CreateTripScreen({ onBack, onDone, onSignal }) {
   const createRef = React.useRef(null)
+  React.useLayoutEffect(() => {
+    // Native mobile inputs can pan the root viewport despite overflow:hidden.
+    // Let the browser own scrolling during this form instead of nesting it
+    // inside the fixed-height tab shell, especially around keyboard dismissal.
+    document.documentElement.classList.add('document-form-flow')
+    return () => document.documentElement.classList.remove('document-form-flow')
+  }, [])
   const savedDraft = useMemo(() => { try { return JSON.parse(localStorage.getItem('next-stop-create-draft-v1')) || {} } catch { return {} } }, [])
   const [step, setStep] = useState(savedDraft.step || 1)
   const [flowMode, setFlowMode] = useState(savedDraft.flowMode || 'guided')
@@ -3619,7 +3626,8 @@ function CreateTripScreen({ onBack, onDone, onSignal }) {
 
   useEffect(() => {
     if (createRef.current) createRef.current.scrollTop = 0
-  }, [step, reviewMode])
+    window.scrollTo({ top: 0, behavior: 'auto' })
+  }, [step, reviewMode, previewPlace?.id])
 
   useEffect(() => {
     const draft = { step, flowMode, city, origin, styles, startDate, endDate, people, pace, transport, dayStartTime, arrivalTime, departureTime, preferenceNote, budget, diet, lodgingPreference, selectedPlaces, hotel, routeDraft, routeOptions, selectedOptionId, reviewMode, travelConstraint, draftVersions }
@@ -3920,7 +3928,7 @@ function CreateTripScreen({ onBack, onDone, onSignal }) {
 
     {step === 1 && <section className="form-stage create-stage create-basics-stage">
       <h1>去哪，玩几天？</h1>
-      <label>目的地（城市 / 地区）<div className="destination-input"><MapPin/><input autoFocus value={city} onChange={event => setCity(event.target.value)} placeholder="例如：杭州或大理"/></div></label>
+      <label>目的地（城市 / 地区）<div className="destination-input"><MapPin/><input value={city} onChange={event => setCity(event.target.value)} placeholder="例如：杭州或大理"/></div></label>
       <div className="two-inputs trip-date-row"><TripDateField label="出发日期" value={startDate} onChange={event => setStartDate(event.target.value)}/><TripDateField label="返程日期" value={endDate} min={startDate} onChange={event => setEndDate(event.target.value)}/></div>
       <div className="edge-time-fields"><div><strong>出发与首末日时间</strong><small>选填</small></div><p className="edge-time-hint">用于检查抵达、返程当天是否来得及</p><label className="edge-origin">从哪个城市出发<input value={origin} onChange={event => setOrigin(event.target.value)} placeholder="例如：上海"/></label><div className="two-inputs"><label>抵达目的地<input type="time" value={arrivalTime} onChange={event => setArrivalTime(event.target.value)}/></label><label>离开目的地<input type="time" value={departureTime} onChange={event => setDepartureTime(event.target.value)}/></label></div></div>
       <div className="people-field"><span>出行人数</span><div><button aria-label="减少人数" onClick={() => setPeople(value => Math.max(1, value - 1))}>−</button><strong>{people} 人</strong><button aria-label="增加人数" onClick={() => setPeople(value => Math.min(12, value + 1))}>＋</button></div></div>
